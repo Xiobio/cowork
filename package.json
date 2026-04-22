@@ -1,0 +1,30 @@
+{
+  "name": "cowork",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "让你在一个地方统筹多个 Claude Code 工人的工具",
+  "scripts": {
+    "build": "tsc",
+    "dev": "npm run build && node dist/index.js",
+    "start": "node dist/index.js",
+    "probe": "node dist/index.js --probe",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "cross-spawn": "^7.0.6",
+    "ink": "^7.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.14",
+    "node-pty": "^1.1.0",
+    "typescript": "^5.7.2"
+  }
+}
