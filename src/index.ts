@@ -28,6 +28,15 @@ import type { CliAdapter, McpServerConfig, SpawnOptions } from './sup-runtime/ty
 import { WorkerManager } from './worker-manager/manager.js';
 import { IpcServer, type IpcServerInfo } from './worker-manager/ipc-server.js';
 import { runTui } from './tui/index.js';
+import {
+  createSession,
+  findLatestSession,
+  listSessions,
+  loadSession,
+  touchSession,
+  type SessionBundle,
+  type SessionMeta,
+} from './session/storage.js';
 
 // ─── 启动参数解析 ──────────────────────────────────
 
@@ -40,6 +49,12 @@ interface CliArgs {
   classic: boolean;
   forceTui: boolean;
   tuiSnapshot: boolean;
+  /** --new: 强制新 session（不 resume 最近一次） */
+  newSession: boolean;
+  /** --session <id>: 指定某个历史 session resume */
+  sessionId: string | null;
+  /** --list-sessions: 打印本目录下所有 session 列表后退出 */
+  listSessions: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -52,6 +67,9 @@ function parseArgs(argv: string[]): CliArgs {
     classic: false,
     forceTui: false,
     tuiSnapshot: false,
+    newSession: false,
+    sessionId: null,
+    listSessions: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -71,6 +89,14 @@ function parseArgs(argv: string[]): CliArgs {
       args.forceTui = true;
     } else if (a === '--tui-snapshot') {
       args.tuiSnapshot = true;
+    } else if (a === '--new') {
+      args.newSession = true;
+    } else if (a === '--session') {
+      args.sessionId = argv[++i] ?? null;
+    } else if (a?.startsWith('--session=')) {
+      args.sessionId = a.slice('--session='.length);
+    } else if (a === '--list-sessions') {
+      args.listSessions = true;
     } else if (a === '--verbose' || a === '-v') {
       args.verbose = true;
     } else if (a === '--help' || a === '-h') {
@@ -87,7 +113,10 @@ function printHelp(): void {
   console.log(`cowork —— 让你在一个地方统筹多个 Claude / Codex 工人
 
 用法:
-  npm run dev                          默认 TUI 模式 (codex adapter)
+  npm run dev                          默认 TUI 模式 (claude adapter)，自动 resume 最近会话
+  npm run dev -- --new                 强制新开一个 session（不 resume）
+  npm run dev -- --session <id>        resume 指定的 session（--list-sessions 看 id）
+  npm run dev -- --list-sessions       列出本目录下所有 session
   npm run dev -- --adapter=<name>      切换 adapter
   npm run dev -- --classic             退到纯 readline 聊天（调试用）
   npm run dev -- --prompt "问题"       单次模式：发一句话拿答案就退出
@@ -98,6 +127,11 @@ function printHelp(): void {
 
 真工人架构：cowork 主进程持有 WorkerManager，招工时会真的 spawn
 一个 CLI subprocess（Codex 或 Claude Code）。关工人时会真的 kill。
+
+Session 语义（phase 1）：
+- 对话记录和工人清单会保存在 .cowork/sessions/<id>/ 下
+- 下次打开默认 resume 最近 session（对话滚屏回放 + 工人列表以 stopped 显示）
+- 工人的真进程**不**自动拉起（phase 2 补），用 /respawn <名字> 用同样 prompt+cwd 再起
 `);
 }
 
@@ -145,6 +179,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.listSessions) {
+    printSessionList();
+    return;
+  }
+
   const mcpServerPath = resolveMcpServerPath();
 
   // 1. 选 adapter 并探测
@@ -163,6 +202,9 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+
+  // 1.5 决定 session：默认 resume 最近一次，--new 强制新建，--session <id> 指定
+  const sessionBundle = resolveSession(args, adapter.name);
 
   // 2. 创建 WorkerManager + IpcServer
   const manager = new WorkerManager({
@@ -198,6 +240,7 @@ async function main(): Promise<void> {
         manager,
         mcpServers,
         snapshot: true,
+        session: sessionBundle,
       });
     } catch (err) {
       console.error('TUI snapshot 错误:', err instanceof Error ? err.message : String(err));
@@ -213,7 +256,7 @@ async function main(): Promise<void> {
 
   if (shouldUseTui) {
     try {
-      await runTui({ adapter, manager, mcpServers });
+      await runTui({ adapter, manager, mcpServers, session: sessionBundle });
     } catch (err) {
       console.error('TUI 错误:', err instanceof Error ? err.message : String(err));
     } finally {
@@ -363,6 +406,77 @@ function printInteractiveHelp(): void {
   console.log();
   console.log('命令：/quit 退出 · /help 帮助');
   console.log();
+}
+
+// ─── session 引导 ─────────────────────────────────
+
+interface ResolvedSession {
+  /** meta + chat + workers，resume 场景下 chat/workers 非空 */
+  bundle: SessionBundle | null;
+  /** 当前活跃 session 的 meta（不管是 resume 还是 new） */
+  meta: SessionMeta;
+  /** 是否是 resume 场景（用来决定是否回放 chat） */
+  resumed: boolean;
+}
+
+function resolveSession(args: CliArgs, adapterName: string): ResolvedSession {
+  const cwd = process.cwd();
+
+  // --new 明确新开
+  if (args.newSession) {
+    const meta = createSession(cwd, adapterName);
+    return { bundle: null, meta, resumed: false };
+  }
+
+  // --session <id> 指定
+  if (args.sessionId) {
+    const loaded = loadSession(cwd, args.sessionId);
+    if (!loaded) {
+      console.error(`错误: 找不到 session "${args.sessionId}"。可用 --list-sessions 查看。`);
+      process.exit(1);
+    }
+    touchSession(cwd, loaded.meta.id);
+    return { bundle: loaded, meta: loaded.meta, resumed: true };
+  }
+
+  // 默认：resume 最近一次
+  const latest = findLatestSession(cwd);
+  if (latest) {
+    const loaded = loadSession(cwd, latest.id);
+    if (loaded) {
+      touchSession(cwd, loaded.meta.id);
+      return { bundle: loaded, meta: loaded.meta, resumed: true };
+    }
+  }
+
+  // 没有历史 session —— 创新的
+  const meta = createSession(cwd, adapterName);
+  return { bundle: null, meta, resumed: false };
+}
+
+function printSessionList(): void {
+  const cwd = process.cwd();
+  const sessions = listSessions(cwd);
+  if (sessions.length === 0) {
+    console.log('本目录下还没有 session。第一次运行 npm run dev 会自动创建。');
+    return;
+  }
+  console.log(`本目录下的 cowork session（${sessions.length} 个，新的在上）：\n`);
+  for (const s of sessions) {
+    const age = formatTimeAgo(new Date(s.lastUsedAt));
+    console.log(`  ${s.id}`);
+    console.log(`    adapter=${s.adapter}  lastUsed=${age}  created=${s.createdAt}`);
+  }
+  console.log(`\nresume 指定的：  npm run dev -- --session <id>`);
+  console.log(`新开一个：       npm run dev -- --new`);
+}
+
+function formatTimeAgo(d: Date): string {
+  const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
 }
 
 async function probeAdapters(): Promise<void> {

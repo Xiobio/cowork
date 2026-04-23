@@ -13,6 +13,15 @@ import { WorkerManager } from './dist/worker-manager/manager.js';
 import { IpcServer } from './dist/worker-manager/ipc-server.js';
 import { IpcClient } from './dist/worker-manager/ipc-client.js';
 import { getAdapter } from './dist/sup-runtime/registry.js';
+import {
+  createSession,
+  appendChat,
+  saveWorkers,
+  loadSession,
+  findLatestSession,
+  listSessions,
+  touchSession,
+} from './dist/session/storage.js';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -464,6 +473,77 @@ async function scenario5_IpcStress(round) {
 }
 
 /**
+ * 场景 6.5 —— session 持久化读写。
+ * 纯 storage 层测试，不起真工人。
+ */
+async function scenario6_5_SessionStorage(round) {
+  const errors = [];
+  const root = makeTempCwd();
+  try {
+    // 初始应无 session
+    if (listSessions(root).length !== 0) errors.push('临时 root 不应有 session');
+
+    // 创建 session
+    const meta = createSession(root, 'claude');
+    if (!meta.id) errors.push('createSession 未返回 id');
+
+    // findLatestSession 应能找到
+    const latest = findLatestSession(root);
+    if (latest?.id !== meta.id) errors.push(`latest 应 = ${meta.id}, 实为 ${latest?.id}`);
+
+    // appendChat + saveWorkers
+    appendChat(root, meta.id, { id: 'm_1', role: 'user', text: 'hello', ts: new Date().toISOString() });
+    appendChat(root, meta.id, { id: 'm_2', role: 'sup', text: 'hi', ts: new Date().toISOString() });
+    saveWorkers(root, meta.id, [
+      {
+        name: '小A',
+        cwd: '/tmp/a',
+        initialPrompt: 'say hi',
+        adapterName: 'claude',
+        state: 'stopped',
+        lastActivity: new Date().toISOString(),
+        eventCount: 5,
+        tokenUsed: 100,
+      },
+    ]);
+
+    // 稍等再 touch 以便 lastUsedAt 递增
+    await sleep(5);
+    touchSession(root, meta.id);
+
+    // loadSession 应能读到
+    const bundle = loadSession(root, meta.id);
+    if (!bundle) {
+      errors.push('loadSession 返回 null');
+    } else {
+      if (bundle.chat.length !== 2) errors.push(`chat 应 2 条, 实为 ${bundle.chat.length}`);
+      if (bundle.chat[0]?.text !== 'hello') errors.push(`chat[0] 错: ${bundle.chat[0]?.text}`);
+      if (bundle.workers.length !== 1) errors.push(`workers 应 1 个, 实为 ${bundle.workers.length}`);
+      if (bundle.workers[0]?.name !== '小A') errors.push(`worker name 错`);
+    }
+
+    // 创第二个 session，findLatest 应返回新的
+    await sleep(5);
+    const meta2 = createSession(root, 'codex');
+    const latest2 = findLatestSession(root);
+    if (latest2?.id !== meta2.id) errors.push(`latest 应切换到新 session ${meta2.id}, 实为 ${latest2?.id}`);
+
+    // listSessions 应有 2 个
+    const all = listSessions(root);
+    if (all.length !== 2) errors.push(`listSessions 应 2, 实为 ${all.length}`);
+
+    // 找不存在的 session 应返回 null
+    const missing = loadSession(root, 'not_a_real_id');
+    if (missing !== null) errors.push('不存在的 session loadSession 应返回 null');
+  } catch (err) {
+    errors.push(`exception: ${err.message}`);
+  } finally {
+    cleanup(root);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/**
  * 场景 6 —— 端到端真 LLM round-trip。
  * spawn 一个真 claude 工人，发 prompt，等真实 assistant_text 事件到来，
  * 验证文本非空。证明整条 pipeline（spawn → stdin → LLM → stdout → parser → event queue）
@@ -543,8 +623,10 @@ const plan = [
   { id: 13, name: '错误路径', fn: () => scenario4_ErrorPaths(1) },
   // 场景 5: 真 10 工人 IPC 压测
   { id: 14, name: '真 10 工人 IPC 压测', fn: () => scenario5_IpcStress(1) },
+  // 场景 6.5: session 持久化
+  { id: 15, name: 'session 存储读写', fn: () => scenario6_5_SessionStorage(1) },
   // 场景 6: 端到端真 LLM round-trip（证明整条管道真在工作）
-  { id: 15, name: '端到端 LLM round-trip', fn: () => scenario6_EndToEnd(1) },
+  { id: 16, name: '端到端 LLM round-trip', fn: () => scenario6_EndToEnd(1) },
 ];
 
 const results = [];

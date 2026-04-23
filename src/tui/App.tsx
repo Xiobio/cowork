@@ -15,8 +15,14 @@ import type { Supervisor, ChatObserver } from '../supervisor.js';
 import type { RunningSession } from '../sup-runtime/types.js';
 import type { WorkerManager } from '../worker-manager/manager.js';
 import type { WorkerInfo } from '../worker-manager/types.js';
+import type {
+  SessionBundle,
+  SessionMeta,
+  WorkerSnapshot,
+} from '../session/storage.js';
+import { appendChat, saveWorkers } from '../session/storage.js';
 import { Splash } from './components/Splash.js';
-import { reducer, initialState, mkMessageId } from './state.js';
+import { reducer, initialState, mkMessageId, seedMessageId } from './state.js';
 import type { WorkerView } from './types.js';
 
 interface AppProps {
@@ -25,6 +31,11 @@ interface AppProps {
   supervisor: Supervisor;
   manager: WorkerManager;
   onExit: () => Promise<void> | void;
+  persistence: {
+    bundle: SessionBundle | null;
+    meta: SessionMeta;
+    resumed: boolean;
+  };
 }
 
 type PanelMode = 'chat' | 'tasks';
@@ -35,13 +46,15 @@ const HELP_TEXT = `可以试试：
   让小A 再说一次
   把小A 停了
 命令：
-  /quit /exit          退出（会停所有工人）
+  /quit /exit          退出（会停所有工人；session 被保存，下次默认 resume）
   /help                帮助
   /clear               清聊天
   /peek <名字>          直接看工人近 20 条事件（不过总管 LLM）
-  /clean               清理所有 stopped 工人`;
+  /clean               清理所有 stopped 工人
+  /respawn <名字>       用历史工人的 cwd+prompt 重新招一个同名工人
+  /new                 提示如何新开 session`;
 
-export function App({ adapter, session, supervisor, manager, onExit }: AppProps) {
+export function App({ adapter, session, supervisor, manager, onExit, persistence }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(reducer, initialState(adapter.name, adapter.displayName));
@@ -63,7 +76,29 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
   useLayoutEffect(() => {
     dispatch({ type: 'session-started', cliSessionId: session.cliSessionId ?? '', pid: session.pid });
     dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
-  }, [session, adapter.displayName, manager]);
+
+    // resume 场景：回放 chat 历史 + 把历史工人塞进 dormantWorkers
+    if (persistence.resumed && persistence.bundle) {
+      const bundle = persistence.bundle;
+      // seed msg id counter，避免新 id 和历史 id 撞
+      let maxId = 0;
+      for (const m of bundle.chat) {
+        const match = m.id.match(/m_(\d+)/);
+        if (match?.[1]) maxId = Math.max(maxId, parseInt(match[1], 10));
+      }
+      seedMessageId(maxId);
+      dispatch({
+        type: 'restore-chat',
+        messages: bundle.chat.map((m) => ({
+          id: m.id,
+          role: m.role,
+          text: m.text,
+          ts: new Date(m.ts),
+        })),
+      });
+      dispatch({ type: 'set-dormant', workers: bundle.workers });
+    }
+  }, [session, adapter.displayName, manager, persistence]);
 
   useEffect(() => {
     // 记每个 worker 上次看到的 state + 我们已经推过的 event id。
@@ -80,6 +115,7 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
       dispatch({ type: 'sup-reply-started', messageId: id });
       dispatch({ type: 'sup-text-final', messageId: id, text: label });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      appendChat(cwd, sessionId, { id, role: 'sup', text: label, ts: new Date().toISOString() });
       void name;
     };
 
@@ -93,9 +129,31 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
       return null;
     };
 
+    const cwd = process.cwd();
+    const sessionId = persistence.meta.id;
+
     const unsub = manager.subscribe(() => {
       const workers = manager.listWorkers();
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(workers) });
+
+      // 持久化工人快照
+      const snapshots: WorkerSnapshot[] = workers.map((w) => ({
+        name: w.name,
+        cwd: w.cwd,
+        initialPrompt: w.initialPrompt,
+        adapterName: w.adapterName,
+        state: w.state,
+        cliSessionId: w.cliSessionId,
+        lastActivity: w.lastActivity.toISOString(),
+        eventCount: w.eventCount,
+        tokenUsed: w.tokenUsed,
+      }));
+      saveWorkers(cwd, sessionId, snapshots);
+
+      // 如果新的活工人和 dormant 里某个重名，把那个 dormant 干掉
+      for (const w of workers) {
+        dispatch({ type: 'remove-dormant', name: w.name });
+      }
 
       for (const w of workers) {
         // 通用状态通知（blocked / stopped / idle→running 恢复等）
@@ -131,6 +189,16 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
 
   // ─── 消息提交 ─────────────────────
 
+  const cwd = process.cwd();
+  const sessionId = persistence.meta.id;
+
+  const persistUser = useCallback((id: string, text: string) => {
+    appendChat(cwd, sessionId, { id, role: 'user', text, ts: new Date().toISOString() });
+  }, [cwd, sessionId]);
+  const persistSup = useCallback((id: string, text: string) => {
+    appendChat(cwd, sessionId, { id, role: 'sup', text, ts: new Date().toISOString() });
+  }, [cwd, sessionId]);
+
   const handleSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -140,22 +208,66 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
     if (trimmed === '/quit' || trimmed === '/exit') { await onExit(); exit(); return; }
     if (trimmed === '/help') {
       const id = mkMessageId();
-      dispatch({ type: 'user-submit', text: trimmed, messageId: `u_${id}` });
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
       dispatch({ type: 'sup-text-final', messageId: id, text: HELP_TEXT });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, HELP_TEXT);
       return;
     }
     if (trimmed === '/clear') { dispatch({ type: 'clear-chat' }); flushedRef.current.clear(); return; }
+    if (trimmed === '/new') {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const hint = '要开新 session 请 /quit 后运行：\n  npm run dev -- --new\n（当前 session 仍会被保存，再 --list-sessions 可看到）';
+      dispatch({ type: 'sup-text-final', messageId: id, text: hint });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, hint);
+      return;
+    }
+    if (trimmed.startsWith('/respawn ')) {
+      const name = trimmed.slice('/respawn '.length).trim();
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const dormant = state.dormantWorkers.find((w) => w.name === name);
+      let hint: string;
+      if (!dormant) {
+        hint = `找不到历史工人 "${name}"。当前 dormant：${state.dormantWorkers.map((w) => w.name).join(', ') || '(无)'}`;
+      } else {
+        const r = await manager.spawnWorker(dormant.name, dormant.cwd, dormant.initialPrompt);
+        if (!r.ok) {
+          hint = `spawn 失败：${r.error}`;
+        } else {
+          dispatch({ type: 'remove-dormant', name });
+          hint = `已重新招 "${name}"（cwd=${dormant.cwd}，同原始 prompt）。注意工人不会恢复之前的 LLM 对话上下文（phase 2 做），但它会从 cwd 里已有文件看到之前的工作成果。`;
+        }
+      }
+      dispatch({ type: 'sup-text-final', messageId: id, text: hint });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, hint);
+      return;
+    }
 
     // /peek <name> —— 直接从 WorkerManager 读近 20 条事件，不过 Sup LLM
     if (trimmed.startsWith('/peek ')) {
       const name = trimmed.slice('/peek '.length).trim();
       const id = mkMessageId();
-      dispatch({ type: 'user-submit', text: trimmed, messageId: `u_${id}` });
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
-      dispatch({ type: 'sup-text-final', messageId: id, text: renderPeek(manager, name) });
+      const out = renderPeek(manager, name);
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
       return;
     }
 
@@ -163,10 +275,14 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
     if (trimmed === '/clean') {
       const n = manager.sweepStopped(0);
       const id = mkMessageId();
-      dispatch({ type: 'user-submit', text: trimmed, messageId: `u_${id}` });
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
-      dispatch({ type: 'sup-text-final', messageId: id, text: `已清理 ${n} 个 stopped 工人` });
+      const out = `已清理 ${n} 个 stopped 工人`;
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
       return;
     }
@@ -174,6 +290,7 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
     const uid = `u_${mkMessageId()}`;
     const sid = `s_${mkMessageId()}`;
     dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+    persistUser(uid, trimmed);
     dispatch({ type: 'sup-reply-started', messageId: sid });
 
     const observer: ChatObserver = {
@@ -189,13 +306,15 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
       const result = await supervisor.chat(trimmed, observer);
       dispatch({ type: 'sup-text-final', messageId: sid, text: result.text });
       dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: result.toolCallCount });
+      persistSup(sid, result.text);
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       dispatch({ type: 'sup-text-final', messageId: sid, text: `[error] ${msg}` });
       dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: 0 });
+      persistSup(sid, `[error] ${msg}`);
     }
-  }, [supervisor, manager, onExit, exit]);
+  }, [supervisor, manager, onExit, exit, persistUser, persistSup, state.dormantWorkers]);
 
   // ─── 键盘 ─────────────────────
 
@@ -265,10 +384,14 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
       {/* 分隔线 */}
       <Text dimColor>{line}</Text>
 
-      {/* 任务列表（始终显示） */}
-      {state.workers.length > 0 && (
+      {/* 任务列表（始终显示；dormant 单独一段） */}
+      {(state.workers.length > 0 || state.dormantWorkers.length > 0) && (
         <Box flexDirection="column" paddingX={1}>
-          <Text dimColor bold>tasks ({state.workers.length})</Text>
+          <Text dimColor bold>
+            tasks ({state.workers.length}
+            {state.dormantWorkers.length > 0 ? ` · +${state.dormantWorkers.length} dormant` : ''}
+            )
+          </Text>
           {state.workers.map(w => {
             const mark = w.state === 'running' ? '*' : w.state === 'blocked' ? '!' : w.state === 'idle' ? '✓' : '.';
             const mColor = w.state === 'running' ? 'yellow' : w.state === 'blocked' ? 'red' : w.state === 'idle' ? 'green' : 'gray';
@@ -291,6 +414,32 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
               </Box>
             );
           })}
+          {state.dormantWorkers.map(w => {
+            const age = formatAge(new Date(w.lastActivity));
+            const meta = `${w.eventCount}ev · ${formatTokens(w.tokenUsed)}`;
+            const label = truncate(w.initialPrompt, Math.max(20, cols - 50));
+            return (
+              <Box key={'d_' + w.name} flexDirection="column">
+                <Box>
+                  <Text color="gray"> · </Text>
+                  <Text color="gray">{w.name.padEnd(6)}</Text>
+                  <Text color="gray"> [dormant]     </Text>
+                  <Text dimColor>{age.padStart(6)}  </Text>
+                  <Text dimColor>{meta}</Text>
+                </Box>
+                <Box paddingLeft={4}>
+                  <Text dimColor>{label}</Text>
+                </Box>
+              </Box>
+            );
+          })}
+          {state.dormantWorkers.length > 0 && (
+            <Box paddingLeft={1}>
+              <Text dimColor italic>
+                dormant = 上次 session 留下的历史工人。用 /respawn &lt;名字&gt; 重新拉起。
+              </Text>
+            </Box>
+          )}
         </Box>
       )}
 

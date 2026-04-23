@@ -7,6 +7,7 @@
  */
 
 import type { WorkerView } from './types.js';
+import type { WorkerSnapshot } from '../session/storage.js';
 
 export type Status =
   | { kind: 'starting'; message: string }
@@ -31,6 +32,8 @@ export interface AppState {
   pid: number | null;
   chat: ChatMessage[];
   workers: WorkerView[];
+  /** resume 场景下还没被 /respawn 重新拉起来的历史工人（本轮 UI-only，不在 WorkerManager 里） */
+  dormantWorkers: WorkerSnapshot[];
   /** 当前 turn 已经看到的工具调用次数（chat 开始时归零、chat 进行中增量）*/
   currentTurnToolCalls: number;
 }
@@ -45,6 +48,7 @@ export const initialState = (adapterName: string, adapterDisplayName: string): A
   pid: null,
   chat: [],
   workers: [],
+  dormantWorkers: [],
   currentTurnToolCalls: 0,
 });
 
@@ -61,7 +65,10 @@ export type Action =
   | { type: 'sup-turn-completed'; messageId: string; toolCallCount: number }
   | { type: 'tool-call'; callId: string; toolName: string; inputSummary: string; workerName?: string | undefined }
   | { type: 'error'; message: string }
-  | { type: 'clear-chat' };
+  | { type: 'clear-chat' }
+  | { type: 'restore-chat'; messages: ChatMessage[] }
+  | { type: 'set-dormant'; workers: WorkerSnapshot[] }
+  | { type: 'remove-dormant'; name: string };
 
 // ─── Reducer ─────────────────────────────────────
 
@@ -163,6 +170,22 @@ export function reducer(state: AppState, action: Action): AppState {
         chat: [],
       };
 
+    case 'restore-chat':
+      // 把历史消息塞进 chat，全部标 non-streaming（避免被当成正在生成）
+      return {
+        ...state,
+        chat: trimChat(action.messages.map((m) => ({ ...m, streaming: false }))),
+      };
+
+    case 'set-dormant':
+      return { ...state, dormantWorkers: action.workers };
+
+    case 'remove-dormant':
+      return {
+        ...state,
+        dormantWorkers: state.dormantWorkers.filter((w) => w.name !== action.name),
+      };
+
     default:
       return state;
   }
@@ -172,3 +195,8 @@ export function reducer(state: AppState, action: Action): AppState {
 
 let nextMsgId = 1;
 export const mkMessageId = (): string => `m_${nextMsgId++}`;
+
+/** 从历史消息里取最大 id 数字，把 counter 推到那之后，避免 id 冲突 */
+export function seedMessageId(maxSeen: number): void {
+  if (maxSeen + 1 > nextMsgId) nextMsgId = maxSeen + 1;
+}

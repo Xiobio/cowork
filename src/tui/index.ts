@@ -14,6 +14,7 @@ import { render, renderToString } from 'ink';
 import type { CliAdapter, McpServerConfig, SpawnOptions } from '../sup-runtime/types.js';
 import { Supervisor, SUPERVISOR_SYSTEM_PROMPT } from '../supervisor.js';
 import type { WorkerManager } from '../worker-manager/manager.js';
+import type { SessionBundle, SessionMeta } from '../session/storage.js';
 import { App } from './App.js';
 
 export interface TuiOptions {
@@ -22,6 +23,12 @@ export interface TuiOptions {
   mcpServers: Record<string, McpServerConfig>;
   /** 快照模式：不开交互，只渲染初始帧到 stdout 然后退出 */
   snapshot?: boolean;
+  /** session 引导结果：meta 必须，bundle 只在 resume 场景下非空 */
+  session: {
+    bundle: SessionBundle | null;
+    meta: SessionMeta;
+    resumed: boolean;
+  };
 }
 
 export async function runTui(opts: TuiOptions): Promise<void> {
@@ -69,6 +76,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
           supervisor,
           manager,
           onExit,
+          persistence: opts.session,
         }),
         { columns: process.stdout.columns ?? 100 },
       );
@@ -86,6 +94,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
       supervisor,
       manager,
       onExit,
+      persistence: opts.session,
     }),
   );
 
