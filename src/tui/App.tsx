@@ -22,6 +22,7 @@ import type {
 } from '../session/storage.js';
 import { appendChat, saveWorkers } from '../session/storage.js';
 import { Splash } from './components/Splash.js';
+import { Markdown } from './components/Markdown.js';
 import { reducer, initialState, mkMessageId, seedMessageId } from './state.js';
 import type { WorkerView } from './types.js';
 
@@ -69,6 +70,14 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     const id = setInterval(() => setTick(t => t + 1), 2000);
     return () => clearInterval(id);
   }, []);
+
+  // 待处理输入队列：Sup 正在回复时用户还继续打字，排进这里，一个 turn 完再 drain。
+  const inputQueueRef = useRef<string[]>([]);
+  const [queueLen, setQueueLen] = useState(0);
+
+  // 输入历史：用户之前发过的消息，用 up/down 回翻。
+  const historyRef = useRef<string[]>([]);
+  const historyCursor = useRef<number>(-1); // -1 = 当前草稿，否则 index into historyRef
 
   // 已经通过 <Static> 输出过的消息 ID，防止重复输出
   const flushedRef = useRef(new Set<string>());
@@ -204,6 +213,23 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     if (!trimmed) return;
     setInput('');
     setPanelMode('chat');
+    historyCursor.current = -1;
+
+    // 推入历史（dedup 最近一条）
+    const hist = historyRef.current;
+    if (hist[hist.length - 1] !== trimmed) {
+      hist.push(trimmed);
+      if (hist.length > 200) hist.splice(0, hist.length - 200);
+    }
+
+    // 如果正在 chatting，排入队列而不是立即跑
+    // /quit /clear /help /peek /clean /respawn /new 这些本地命令是否也排队？
+    // 答：都排队，更一致的语义。真的要立即 /quit 的可以 Ctrl+C。
+    if (state.status.kind === 'chatting') {
+      inputQueueRef.current.push(trimmed);
+      setQueueLen(inputQueueRef.current.length);
+      return;
+    }
 
     if (trimmed === '/quit' || trimmed === '/exit') { await onExit(); exit(); return; }
     if (trimmed === '/help') {
@@ -314,18 +340,82 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: 0 });
       persistSup(sid, `[error] ${msg}`);
     }
-  }, [supervisor, manager, onExit, exit, persistUser, persistSup, state.dormantWorkers]);
+  }, [supervisor, manager, onExit, exit, persistUser, persistSup, state.dormantWorkers, state.status.kind]);
+
+  // Turn 结束后 drain 一条输入队列。注意 handleSubmit 自己会再次进入 chatting
+  // 状态（Sup 的 chat 路径）或者直接完成（本地命令），下一轮再触发这个 effect。
+  const drainingRef = useRef(false);
+  useEffect(() => {
+    if (state.status.kind !== 'ready') return;
+    if (inputQueueRef.current.length === 0) return;
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    const next = inputQueueRef.current.shift()!;
+    setQueueLen(inputQueueRef.current.length);
+    // 用 Promise.resolve 让出当前 render，再 submit
+    void Promise.resolve().then(async () => {
+      try {
+        await handleSubmit(next);
+      } finally {
+        drainingRef.current = false;
+      }
+    });
+  }, [state.status.kind, handleSubmit]);
 
   // ─── 键盘 ─────────────────────
 
   useInput((ch, key) => {
+    // 全局：Ctrl+C 退出
     if (key.ctrl && ch === 'c') { void (async () => { await onExit(); exit(); })(); return; }
-    if (key.tab) { setPanelMode(m => m === 'chat' ? 'tasks' : 'chat'); return; }
-    if (key.escape) { setPanelMode('chat'); return; }
+
+    // Ctrl+L 清屏（Claude Code 同键）
+    if (key.ctrl && ch === 'l') {
+      dispatch({ type: 'clear-chat' });
+      flushedRef.current.clear();
+      return;
+    }
 
     if (panelMode === 'tasks') {
-      if (key.upArrow) setTaskCursor(c => Math.max(0, c - 1));
-      if (key.downArrow) setTaskCursor(c => Math.min(state.workers.length - 1, c));
+      if (key.tab) { setPanelMode('chat'); return; }
+      if (key.escape) { setPanelMode('chat'); return; }
+      if (key.upArrow) { setTaskCursor(c => Math.max(0, c - 1)); return; }
+      if (key.downArrow) { setTaskCursor(c => Math.min(state.workers.length - 1, c)); return; }
+      return;
+    }
+
+    // chat 模式下
+    if (key.tab) { setPanelMode('tasks'); return; }
+
+    // Esc 清输入 + 重置历史游标
+    if (key.escape) {
+      setInput('');
+      historyCursor.current = -1;
+      return;
+    }
+
+    // 上 = 更早历史，下 = 更近（或回到草稿）
+    if (key.upArrow) {
+      const hist = historyRef.current;
+      if (hist.length === 0) return;
+      const cur = historyCursor.current;
+      const next = cur < 0 ? hist.length - 1 : Math.max(0, cur - 1);
+      historyCursor.current = next;
+      setInput(hist[next] ?? '');
+      return;
+    }
+    if (key.downArrow) {
+      const hist = historyRef.current;
+      const cur = historyCursor.current;
+      if (cur < 0) return; // 已经在草稿
+      if (cur >= hist.length - 1) {
+        historyCursor.current = -1;
+        setInput('');
+      } else {
+        const next = cur + 1;
+        historyCursor.current = next;
+        setInput(hist[next] ?? '');
+      }
+      return;
     }
   });
 
@@ -354,13 +444,11 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       {/* 已完成的消息 → 进 terminal scrollback，鼠标可翻 */}
       <Static items={newMessages}>
         {(msg) => (
-          <Box key={msg.id} flexDirection="column" paddingX={1}>
+          <Box key={msg.id} flexDirection="column" paddingX={1} marginBottom={1}>
             {msg.role === 'user' ? (
               <Text color="cyan"><Text bold>&gt;</Text> {msg.text}</Text>
             ) : (
-              <Box marginBottom={1}>
-                <Text>{msg.text}</Text>
-              </Box>
+              <Markdown text={msg.text} />
             )}
           </Box>
         )}
@@ -369,7 +457,10 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       {/* 正在生成的消息（动态区，会被下次渲染覆盖） */}
       {streamingMsg && (
         <Box paddingX={1}>
-          <Text dimColor>{streamingMsg.text || '...'}</Text>
+          {streamingMsg.text
+            ? <Markdown text={streamingMsg.text} />
+            : <Text dimColor>...</Text>
+          }
         </Box>
       )}
 
@@ -443,25 +534,19 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         </Box>
       )}
 
-      {/* 输入框 */}
+      {/* 输入框 —— 总是显示，chatting 时提交到队列而不是立即发送 */}
       <Box paddingX={1}>
-        {isChatting ? (
-          <Box>
-            <Text color="yellow"><Spinner type="dots" /></Text>
-            <Text dimColor> waiting for response...</Text>
-          </Box>
-        ) : (
-          <Box>
-            <Text color="cyan" bold>&gt; </Text>
-            <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} placeholder="" />
-          </Box>
-        )}
+        <Text color={isChatting ? 'yellow' : 'cyan'} bold>&gt; </Text>
+        <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} placeholder={isChatting ? '总管还在回复中，你可以继续打字，会排队...' : ''} />
       </Box>
 
       {/* 底部提示 */}
       <Text dimColor>{line}</Text>
       <Box paddingX={1}>
-        <Text dimColor>tab:tasks  /quit  /help  /clear</Text>
+        <Text dimColor>
+          ↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · /help
+          {queueLen > 0 ? `  · queued: ${queueLen}` : ''}
+        </Text>
       </Box>
     </Box>
   );
