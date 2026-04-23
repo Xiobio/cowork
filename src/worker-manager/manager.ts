@@ -22,6 +22,10 @@ import type {
 } from './types.js';
 
 const EVENT_BUFFER_MAX = 500;
+/** stopped 工人超过这个时间没动静就自动从 map 里扫掉 */
+const STOPPED_TTL_MS = 10 * 60 * 1000;
+/** 自动扫最少间隔：防止每次 listWorkers 都走全扫 */
+const SWEEP_MIN_INTERVAL_MS = 60 * 1000;
 
 interface WorkerEntry {
   info: WorkerInfo;
@@ -40,6 +44,8 @@ export class WorkerManager implements IWorkerManager {
   /** eventId → entry 的全局索引，给 readEvent 做 O(1) 查找 */
   private readonly eventIndex = new Map<string, WorkerEntry>();
   private nextEventId = 1;
+  /** 上次 sweep 时间戳，opportunistic 节流用 */
+  private lastSweepAt = 0;
 
   constructor(opts: { adapter: CliAdapter; adapterName: string; workerCwdRoot: string }) {
     this.adapter = opts.adapter;
@@ -66,7 +72,39 @@ export class WorkerManager implements IWorkerManager {
   // ─── 读 ───────────────────────────────────────
 
   listWorkers(): WorkerInfo[] {
+    this.maybeSweepStopped();
     return [...this.workers.values()].map((e) => ({ ...e.info }));
+  }
+
+  /** opportunistic 清理：stopped 超 TTL 且距上次 sweep 超 1min 才扫 */
+  private maybeSweepStopped(): void {
+    const now = Date.now();
+    if (now - this.lastSweepAt < SWEEP_MIN_INTERVAL_MS) return;
+    this.lastSweepAt = now;
+    this.sweepStopped(STOPPED_TTL_MS);
+  }
+
+  /**
+   * 立即扫一遍所有 stopped 且 lastActivity 超过 olderThanMs 的工人，
+   * 把它们从 map 里彻底删掉。返回被删数量。
+   */
+  sweepStopped(olderThanMs: number): number {
+    const now = Date.now();
+    const toRemove: string[] = [];
+    for (const [name, entry] of this.workers) {
+      if (entry.info.state !== 'stopped') continue;
+      if (now - entry.info.lastActivity.getTime() < olderThanMs) continue;
+      toRemove.push(name);
+    }
+    for (const name of toRemove) {
+      const entry = this.workers.get(name);
+      if (!entry) continue;
+      for (const e of entry.events) this.eventIndex.delete(e.id);
+      entry.events.length = 0;
+      this.workers.delete(name);
+    }
+    if (toRemove.length > 0) this.notify();
+    return toRemove.length;
   }
 
   getWorker(name: string): WorkerInfo | null {
@@ -300,8 +338,16 @@ export class WorkerManager implements IWorkerManager {
         this.ingestEvent(entry, event);
         this.notify();
       }
-    } catch {
+    } catch (err) {
       // iterator 异常（session 进程异常退出、pipe 断裂等）
+      // 之前是 silent catch —— Sup 读不到任何信号，只能从 state=stopped 推断。
+      // 现在 synthesize 一条 session_error 进事件流，上层能看见原因。
+      this.ingestEvent(entry, {
+        type: 'session_error',
+        message: `event stream aborted: ${err instanceof Error ? err.message : String(err)}`,
+        fatal: true,
+        ts: new Date(),
+      });
     }
     entry.info.state = 'stopped';
     entry.info.currentAction = null;

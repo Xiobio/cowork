@@ -332,6 +332,22 @@ async function scenario4_ErrorPaths(round) {
         }
       }
     }
+
+    // 11. sweepStopped(0) 应立即清掉所有 stopped 工人
+    const sweepName = `${tag}_sweep`;
+    const rSw = await manager.spawnWorker(sweepName, cwd, TRIVIAL_PROMPT);
+    if (!rSw.ok) {
+      errors.push(`sweep 预 spawn 失败: ${rSw.error}`);
+    } else {
+      await manager.killWorker(sweepName, true);
+      await waitFor(() => manager.getWorker(sweepName)?.state === 'stopped', 2000);
+      const beforeCount = manager.listWorkers().filter(w => w.state === 'stopped').length;
+      const swept = manager.sweepStopped(0);
+      if (swept < 1) errors.push(`sweepStopped(0) 应扫到 >=1, 实为 ${swept}`);
+      if (manager.getWorker(sweepName) !== null) errors.push('sweep 后 getWorker 应返回 null');
+      const afterCount = manager.listWorkers().filter(w => w.state === 'stopped').length;
+      if (afterCount >= beforeCount) errors.push(`sweep 前后 stopped 数应下降, ${beforeCount}→${afterCount}`);
+    }
   } catch (err) {
     errors.push(`exception: ${err.message}`);
   } finally {

@@ -144,7 +144,7 @@ export class Supervisor {
     let stopReason: ChatResult['stopReason'] = 'end_turn';
 
     while (true) {
-      // 竞速 idle 超时：CLI 卡死时抛错，别让 chat 永挂。
+      // 竞速 idle 超时：CLI 卡死时先试 interrupt 把它拖回来，不行再抛错。
       // 注意 orphan waiter 会留在 BaseRunningSession.waiters 里，
       // 下一次 chat 时会被第一条真正的事件消费掉，可接受。
       let timer: NodeJS.Timeout | null = null;
@@ -154,6 +154,20 @@ export class Supervisor {
       let step: IteratorResult<CanonicalEvent>;
       try {
         step = await Promise.race([this.iter.next(), timeoutPromise]);
+      } catch (err) {
+        // idle 卡死：尝试 interrupt 一次，再给 2s grace 等 interrupted 事件
+        observer?.onError?.(`idle timeout after ${idleMs}ms, 尝试 interrupt`, false);
+        try { await this.session.sendInterrupt(); } catch { /* ignore */ }
+        const grace = new Promise<never>((_, rej) => {
+          setTimeout(() => rej(err instanceof Error ? err : new Error(String(err))), 2000);
+        });
+        try {
+          step = await Promise.race([this.iter.next(), grace]);
+        } catch (finalErr) {
+          // interrupt 也没救回来，把错抛给上层
+          stopReason = 'error';
+          return { text: textParts.join('\n\n'), toolCallCount, stopReason };
+        }
       } finally {
         if (timer) clearTimeout(timer);
       }
