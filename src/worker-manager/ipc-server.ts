@@ -45,12 +45,13 @@ export class IpcServer {
     const token = randomBytes(16).toString('hex');
     const server = createServer((socket) => this.handleSocket(socket));
 
+    // 持久 error listener：listen 之后再 emit 的 error（端口冲突、FS 问题等）
+    // 如果没有 listener node 会整个 crash。这里吞掉，server close 会兜底。
+    server.on('error', () => { /* swallow */ });
+
     await new Promise<void>((resolve, reject) => {
+      server.listen(0, '127.0.0.1', () => resolve());
       server.once('error', reject);
-      server.listen(0, '127.0.0.1', () => {
-        server.off('error', reject);
-        resolve();
-      });
     });
 
     const addr = server.address();

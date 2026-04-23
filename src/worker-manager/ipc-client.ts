@@ -35,7 +35,10 @@ export class IpcClient {
       const socket = createConnection(this.opts.port, this.opts.host);
       socket.setEncoding('utf8');
 
-      socket.once('error', (err) => reject(err));
+      // 持久 error listener：握手期间任何错误 reject 外面的 connect Promise；
+      // 握手完之后再 fire 的错误 reject 是 no-op，但起码 socket 的 'error'
+      // 事件有人接，不会被 node 当 unhandled 整个进程崩。close 会兜底清 pending。
+      socket.on('error', (err) => reject(err));
 
       socket.on('data', (chunk: string) => {
         this.buffer += chunk;

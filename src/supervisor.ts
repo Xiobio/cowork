@@ -158,15 +158,18 @@ export class Supervisor {
         // idle 卡死：尝试 interrupt 一次，再给 2s grace 等 interrupted 事件
         observer?.onError?.(`idle timeout after ${idleMs}ms, 尝试 interrupt`, false);
         try { await this.session.sendInterrupt(); } catch { /* ignore */ }
+        let graceTimer: NodeJS.Timeout | null = null;
         const grace = new Promise<never>((_, rej) => {
-          setTimeout(() => rej(err instanceof Error ? err : new Error(String(err))), 2000);
+          graceTimer = setTimeout(() => rej(err instanceof Error ? err : new Error(String(err))), 2000);
         });
         try {
           step = await Promise.race([this.iter.next(), grace]);
-        } catch (finalErr) {
+        } catch {
           // interrupt 也没救回来，把错抛给上层
           stopReason = 'error';
           return { text: textParts.join('\n\n'), toolCallCount, stopReason };
+        } finally {
+          if (graceTimer) clearTimeout(graceTimer);
         }
       } finally {
         if (timer) clearTimeout(timer);
