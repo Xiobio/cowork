@@ -224,7 +224,10 @@ export class WorkerManager implements IWorkerManager {
       await session.sendUserMessage(initialPrompt);
       entry.info.state = 'running';
     } catch (err) {
-      entry.info.state = 'stopped';
+      // 回滚：zombie entry 会让下次同名 spawn 报"已存在"，必须从 map 删掉
+      // 同时把刚 spawn 出来的 session 停了，别漏进程
+      this.workers.delete(name);
+      try { await session.stop({ timeoutMs: 1000 }); } catch { /* ignore */ }
       this.notify();
       return { ok: false, error: `启动初始任务失败: ${err instanceof Error ? err.message : err}` };
     }
@@ -239,6 +242,8 @@ export class WorkerManager implements IWorkerManager {
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     const entry = this.workers.get(name);
     if (!entry) return { ok: false, error: `找不到工人 "${name}"` };
+    // 幂等：已 stopped 就直接返回成功，不要再等 3s timeout
+    if (entry.info.state === 'stopped') return { ok: true };
     try {
       if (graceful) {
         await entry.session.stop({ timeoutMs: 3000 });

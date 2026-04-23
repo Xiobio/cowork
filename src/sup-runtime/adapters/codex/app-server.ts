@@ -205,7 +205,14 @@ export class JsonRpcClient {
     const p = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
-    this.writeLine(payload);
+    // 写失败（EPIPE 等）要把 pending 拒绝掉，否则调用方永挂到 stdout close
+    this.writeLine(payload).catch((err) => {
+      const pending = this.pending.get(id);
+      if (pending) {
+        this.pending.delete(id);
+        pending.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
     return p as Promise<T>;
   }
 
@@ -213,7 +220,8 @@ export class JsonRpcClient {
     if (this.closed) return;
     const payload: JsonRpcNotification = { jsonrpc: '2.0', method };
     if (params !== undefined) payload.params = params;
-    this.writeLine(payload);
+    // fire-and-forget notification：写失败吞掉（和 notification 语义一致）
+    this.writeLine(payload).catch(() => {});
   }
 
   public onNotification(method: string, handler: NotificationHandler): void {
@@ -227,7 +235,7 @@ export class JsonRpcClient {
   private sendResponse(id: Id, result: unknown): void {
     if (this.closed) return;
     const payload: JsonRpcResponseSuccess = { jsonrpc: '2.0', id, result };
-    this.writeLine(payload);
+    this.writeLine(payload).catch(() => {});
   }
 
   private sendError(id: Id, code: number, message: string, data?: unknown): void {
@@ -237,12 +245,19 @@ export class JsonRpcClient {
       id,
       error: { code, message, ...(data !== undefined ? { data } : {}) },
     };
-    this.writeLine(payload);
+    this.writeLine(payload).catch(() => {});
   }
 
-  private writeLine(msg: JsonRpcMessage): void {
+  private writeLine(msg: JsonRpcMessage): Promise<void> {
     const line = JSON.stringify(msg) + '\n';
-    if (!this.child.stdin || this.child.stdin.destroyed) return;
-    this.child.stdin.write(line);
+    if (!this.child.stdin || this.child.stdin.destroyed) {
+      return Promise.reject(new Error('codex stdin 已关闭'));
+    }
+    return new Promise((resolve, reject) => {
+      this.child.stdin!.write(line, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   }
 }

@@ -198,6 +198,9 @@ class CodexSession extends BaseRunningSession {
     });
 
     this.client.onNotification('error', (params) => {
+      // error notification 意味着当前 turn 被打断，activeTurnId 要清掉，
+      // 否则后续 sendInterrupt 会拿着一个已死的 turnId 去调 turn/interrupt
+      this.activeTurnId = null;
       for (const ev of parseError(params as ErrorNotification)) {
         this.enqueueEvent(ev);
       }

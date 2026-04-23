@@ -174,7 +174,7 @@ class ClaudeCodeSession extends BaseRunningSession {
     if (!this.child.stdin || this.child.stdin.destroyed) {
       throw new Error('claude stdin 已关闭');
     }
-    writeUserMessage(this.child.stdin, text);
+    await writeUserMessage(this.child.stdin, text);
   }
 
   async sendInterrupt(): Promise<void> {

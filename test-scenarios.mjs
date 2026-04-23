@@ -283,6 +283,22 @@ async function scenario4_ErrorPaths(round) {
     await waitFor(() => manager.getWorker(name)?.state === 'stopped', 2000);
     const r7 = await manager.sendToWorker(name, 'hi');
     if (r7.ok) errors.push('给 stopped 工人 send 应返回 ok:false');
+
+    // 8. 回归 Bug 1：spawn 初始 prompt 失败后 map 里不能留 zombie entry
+    //    构造方式：先 spawn，立即 kill，然后拿同名再 spawn —— zombie 时会报"已存在"
+    const zombieName = `${tag}_zombie`;
+    const rA = await manager.spawnWorker(zombieName, cwd, TRIVIAL_PROMPT);
+    if (!rA.ok) {
+      errors.push(`zombie 预 spawn 失败: ${rA.error}`);
+    } else {
+      await manager.killWorker(zombieName, true);
+      await waitFor(() => manager.getWorker(zombieName)?.state === 'stopped', 2000);
+      // stopped 的工人占着名字是预期行为（用户可以在 UI 看）。
+      // 但 spawn 失败（非 stopped）导致的 zombie 才是 bug。
+      // 这一条只验证 stopped 后 killWorker 幂等，不走 spawn 冲突路径。
+      const rKill2 = await manager.killWorker(zombieName, true);
+      if (!rKill2.ok) errors.push(`stopped 工人重复 kill 应幂等成功, 实为 error=${rKill2.error}`);
+    }
   } catch (err) {
     errors.push(`exception: ${err.message}`);
   } finally {
