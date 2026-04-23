@@ -34,7 +34,12 @@ const HELP_TEXT = `可以试试：
   现在大家都怎么样
   让小A 再说一次
   把小A 停了
-命令：/quit /help /clear  Tab:切任务面板`;
+命令：
+  /quit /exit          退出（会停所有工人）
+  /help                帮助
+  /clear               清聊天
+  /peek <名字>          直接看工人近 20 条事件（不过总管 LLM）
+  /clean               清理所有 stopped 工人`;
 
 export function App({ adapter, session, supervisor, manager, onExit }: AppProps) {
   const { exit } = useApp();
@@ -45,6 +50,12 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
   const [showSplash, setShowSplash] = useState(true);
   const [panelMode, setPanelMode] = useState<PanelMode>('chat');
   const [taskCursor, setTaskCursor] = useState(0);
+  // tick 每 2 秒强制 re-render，让 "5s ago" 这种相对时间能更新
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 2000);
+    return () => clearInterval(id);
+  }, []);
 
   // 已经通过 <Static> 输出过的消息 ID，防止重复输出
   const flushedRef = useRef(new Set<string>());
@@ -136,6 +147,29 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
       return;
     }
     if (trimmed === '/clear') { dispatch({ type: 'clear-chat' }); flushedRef.current.clear(); return; }
+
+    // /peek <name> —— 直接从 WorkerManager 读近 20 条事件，不过 Sup LLM
+    if (trimmed.startsWith('/peek ')) {
+      const name = trimmed.slice('/peek '.length).trim();
+      const id = mkMessageId();
+      dispatch({ type: 'user-submit', text: trimmed, messageId: `u_${id}` });
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      dispatch({ type: 'sup-text-final', messageId: id, text: renderPeek(manager, name) });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      return;
+    }
+
+    // /clean —— 把所有 stopped 工人从 map 里清掉（立即 sweep，不等 TTL）
+    if (trimmed === '/clean') {
+      const n = manager.sweepStopped(0);
+      const id = mkMessageId();
+      dispatch({ type: 'user-submit', text: trimmed, messageId: `u_${id}` });
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      dispatch({ type: 'sup-text-final', messageId: id, text: `已清理 ${n} 个 stopped 工人` });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
+      return;
+    }
 
     const uid = `u_${mkMessageId()}`;
     const sid = `s_${mkMessageId()}`;
@@ -238,13 +272,22 @@ export function App({ adapter, session, supervisor, manager, onExit }: AppProps)
           {state.workers.map(w => {
             const mark = w.state === 'running' ? '*' : w.state === 'blocked' ? '!' : w.state === 'idle' ? '✓' : '.';
             const mColor = w.state === 'running' ? 'yellow' : w.state === 'blocked' ? 'red' : w.state === 'idle' ? 'green' : 'gray';
-            const tag = w.state === 'blocked' ? ' [你]' : w.state === 'running' ? ' [AI]' : '';
-            const label = truncate(taskLabels.get(w.name) ?? '', 40);
+            const action = w.currentAction ? `[${w.currentAction}]` : '';
+            const age = formatAge(w.lastActivity);
+            const meta = `${w.eventCount}ev · ${formatTokens(w.tokenUsed)}`;
+            const label = truncate(taskLabels.get(w.name) ?? '', Math.max(20, cols - 50));
             return (
-              <Box key={w.name}>
-                <Text color={mColor}> {mark} </Text>
-                <Text>{w.name}</Text>
-                <Text dimColor>  {label}{tag}</Text>
+              <Box key={w.name} flexDirection="column">
+                <Box>
+                  <Text color={mColor}> {mark} </Text>
+                  <Text bold>{w.name.padEnd(6)}</Text>
+                  <Text color="cyan"> {action.padEnd(14)}</Text>
+                  <Text dimColor>{age.padStart(6)}  </Text>
+                  <Text dimColor>{meta}</Text>
+                </Box>
+                <Box paddingLeft={4}>
+                  <Text dimColor>{label}</Text>
+                </Box>
               </Box>
             );
           })}
@@ -312,7 +355,60 @@ function mapWorkers(list: WorkerInfo[]): WorkerView[] {
     lastActivity: w.lastActivity,
     tokenUsed: w.tokenUsed,
     currentAction: w.currentAction,
+    eventCount: w.eventCount,
   }));
+}
+
+function formatAge(d: Date): string {
+  const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  return `${Math.floor(sec / 3600)}h`;
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return `${n}t`;
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}kt`;
+  return `${(n / 1_000_000).toFixed(1)}Mt`;
+}
+
+/** /peek 命令：读近 20 条事件元数据 + 尝试展开最后一条 assistant_text */
+function renderPeek(manager: WorkerManager, name: string): string {
+  const worker = manager.getWorker(name);
+  if (!worker) return `找不到工人 "${name}"。当前工人：${manager.listWorkers().map(w => w.name).join(', ') || '(无)'}`;
+  const events = manager.peekEvents(name, { limit: 20 }) ?? [];
+  const lines: string[] = [];
+  lines.push(`[${name}] state=${worker.state} · ${worker.eventCount} 条事件 · ${formatTokens(worker.tokenUsed)} · ${worker.currentAction ? '正在 ' + worker.currentAction : '空闲'}`);
+  lines.push(`cwd: ${worker.cwd}`);
+  lines.push(`任务: ${worker.initialPrompt}`);
+  lines.push('');
+  if (events.length === 0) {
+    lines.push('(还没有事件)');
+    return lines.join('\n');
+  }
+  lines.push('近 20 条事件：');
+  for (const e of events) {
+    const tag = e.type === 'assistant_text' ? '💬'
+      : e.type === 'tool_call' ? '🔧'
+      : e.type === 'tool_result' ? '↩️'
+      : e.type === 'error' ? '❌'
+      : e.type === 'completion' ? '✓'
+      : '·';
+    const prefix = e.toolName ? `${e.toolName}: ` : '';
+    lines.push(`  ${tag} ${prefix}${e.preview}`);
+  }
+  // 展开最后一条 assistant_text 的正文
+  const lastText = [...events].reverse().find(e => e.type === 'assistant_text');
+  if (lastText) {
+    const body = manager.readEvent(lastText.id);
+    if (typeof body?.body === 'string' && body.body.length > 0) {
+      lines.push('');
+      lines.push(`最后一段说话：`);
+      const text = body.body.length > 600 ? body.body.slice(0, 597) + '…' : body.body;
+      for (const ln of text.split(/\r?\n/)) lines.push(`  ${ln}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function shortenToolName(t: string): string {

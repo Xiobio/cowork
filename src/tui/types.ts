@@ -12,4 +12,5 @@ export interface WorkerView {
   lastActivity: Date;
   tokenUsed: number;
   currentAction: string | null;
+  eventCount: number;
 }
