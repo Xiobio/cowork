@@ -21,22 +21,24 @@
 
 ## 当前状态
 
-**v3 可用** —— mock 拆了，工人是真的：
+**v3 可用** —— 工人是真 CLI subprocess，不是 mock：
 
 - ✅ 总管跑在 Codex 或 Claude Code subprocess 里
-- ✅ **工人也是真的 CLI subprocess**。`spawn_worker` 会真的 `fork codex app-server`
-  或 `claude -p` 子进程，分配真的 pid / cliSessionId，吃真的订阅配额
+- ✅ **工人也是真 CLI subprocess**。`spawn_worker` 会真的 fork
+  `codex app-server` 或 `claude -p`，分配真 pid / cliSessionId，吃真订阅配额
 - ✅ WorkerManager + IpcServer 架构：主进程持有真工人，MCP server
-  子进程通过本地 TCP + token 打回主进程
+  子进程通过本地 TCP + UUID token 打回主进程
 - ✅ 12 个工具（list / spawn / send / kill / peek / read 等）都走真状态
-- ✅ **TUI**：Ink 驱动，左侧对话 + 右上工人状态 + 右下事件流
-  （sidebar 实时反映真工人进程的状态）
+- ✅ **TUI**：Ink `<Static>` scrollback + 底部 tasks 面板 + 输入框，
+  实时反映真工人的状态和完成通知
 - ✅ Classic 模式（`--classic`）：纯 readline 聊天
 - ✅ 单次模式（`--prompt`）：脚本化测试
 - ✅ 两个 CLI adapter（Codex / Claude Code）都跑通了真工人
+- ✅ 15 场景测试（并发 spawn / 中途 kill / 跨 adapter / 错误路径 /
+  10 工人 IPC 压测 / 真 LLM round-trip），见 [test-scenarios.mjs](test-scenarios.mjs)
 
 尚未：多会话持久化、主动汇报（Sup 主动顶事件而不是等你问）、
-cli-daemon 级别的进程监控（比如 worker 挂了自动恢复）。
+工人挂了自动恢复。
 
 ## 运行
 
@@ -44,8 +46,8 @@ cli-daemon 级别的进程监控（比如 worker 挂了自动恢复）。
 
 - Node.js 20+（推荐 22+）
 - 下面至少一个 CLI 已安装并登录好：
-  - **[Codex CLI](https://github.com/openai/codex)** 0.118+ —— 默认
-  - **[Claude Code](https://docs.claude.com/claude-code)** 2.0+
+  - **[Claude Code](https://docs.claude.com/claude-code)** 2.0+ —— 默认
+  - **[Codex CLI](https://github.com/openai/codex)** 0.118+
 
 **不需要** 单独申请 Anthropic / OpenAI API key —— 总管直接继承你 CLI
 的登录（订阅或 API key 都行）。
@@ -66,11 +68,11 @@ npm run probe
 #     codex        OpenAI Codex CLI       ✓ 0.118.0
 #     claude-code  Anthropic Claude Code  ✓ 2.1.109
 
-# 4. 启动 —— 默认进 TUI
+# 4. 启动 —— 默认进 TUI（默认 adapter = claude）
 npm run dev
 
-#   或用 claude code 当总管：
-npm run dev -- --adapter=claude
+#   用 codex 当总管：
+npm run dev -- --adapter=codex
 ```
 
 TUI 里 `/help` 看建议的试玩问题，`/quit` 或 Ctrl+C 退出。
@@ -78,32 +80,32 @@ TUI 里 `/help` 看建议的试玩问题，`/quit` 或 Ctrl+C 退出。
 ### TUI 布局
 
 ```
-┌─ 🦅 cowork · Codex            2跑 1阻 · 就绪 · 18:04 ─┐
-│                                                       │
-│ ┌─ 💬 对话 ───────────┐ ┌─ 👷 工人状态 (4) ───┐      │
-│ │ 👤 你 · 18:04         │ │ ● 小A   Edit  2.1kt │      │
-│ │   现在大家都怎么样？  │ │ ● 小B   Bash  4.9kt │      │
-│ │                      │ │ ◆ 小C         3.2kt │      │
-│ │ 🤖 总管 · 18:04       │ │ ○ 小D         1.8kt │      │
-│ │   ⚠ 需要你决定        │ └─────────────────────┘      │
-│ │    小C 卡住了…        │                              │
-│ │                      │ ┌─ 📜 事件流 ─────────┐      │
-│ │   ℹ 通报             │ │ 18:04 → 现在大家都 │      │
-│ │    小A 重构完成…      │ │ 18:04 🔧 list_wor… │      │
-│ │                      │ │ 18:04 🔧 peek_eve… │      │
-│ │                      │ │ 18:04 ← 就绪        │      │
-│ │                      │ └─────────────────────┘      │
-│ └──────────────────────┘                              │
-│                                                       │
-│ ┌─ ✎ 跟总管说点什么… ──────────────────────────────┐  │
-│ └──────────────────────────────────────────────────┘  │
-│  Enter 发送 · Ctrl+C 退出 · /quit · /help · /clear   │
-└───────────────────────────────────────────────────────┘
+    ◇
+    c o w o r k           ← 开场 splash（~2 秒）
+    coordinate your AI workers
+    from a single conversation
+
+> 现在大家都怎么样？       ← 已发送的对话进 terminal scrollback，
+                            鼠标/PageUp 可翻
+ℹ 通报
+  小A 已完成重构，正在 run test
+⚠ 需要你决定
+  小C 在 d:/proj/a 跑到一半，遇到 auth 失败
+
+─────────────────────────────────
+ tasks (3)
+  * 小A  重构 user auth 模块 [AI]
+  ! 小B  跑性能压测 [你]
+  ✓ 小C  补文档
+─────────────────────────────────
+ >  _                     ← 输入区
+─────────────────────────────────
+ tab:tasks  /quit  /help  /clear
 ```
 
-左侧是你和总管的对话（流动滚屏）。右侧上半是当前工人列表（状态点 +
-名字 + 当前动作 + token 累计），右下是事件流（总管每次调用的工具、
-发送的消息、错误）。底下是输入框。
+上方是和总管的对话（用 Ink `<Static>` 输出到 scrollback，保留历史）。
+下方固定区：tasks 面板始终显示、输入框、底部 hint。没有边框、没有
+侧栏 —— 照搬 Claude Code 的简洁风格。
 
 ### Classic 模式（纯 readline）
 
@@ -119,8 +121,8 @@ npm run dev -- --classic
 # 一次性问一句话
 node dist/index.js --prompt "现在大家都怎么样？"
 
-# 用 claude code 跑同样的问题
-node dist/index.js --adapter=claude --prompt "小C 为什么卡住了？"
+# 用 codex 跑同样的问题
+node dist/index.js --adapter=codex --prompt "小C 为什么卡住了？"
 
 # verbose 显示每个工具调用
 node dist/index.js --prompt "..." --verbose
@@ -184,17 +186,11 @@ src/
 │
 ├── tui/                       Ink / React TUI 界面
 │   ├── index.ts                 TUI 入口（spawn supervisor + render）
-│   ├── App.tsx                  主组件（持 WorkerManager 引用 + subscribe）
+│   ├── App.tsx                  主组件（Static scrollback + 任务面板 + 输入）
 │   ├── state.ts                 reducer + actions + initialState
 │   ├── types.ts                 WorkerView 等 UI 层类型
 │   └── components/
-│       ├── StatusBar.tsx        顶部状态条
-│       ├── Clock.tsx            独立时钟（避免每秒整屏 re-render）
-│       ├── ChatPane.tsx         对话主区
-│       ├── WorkersPane.tsx      右上：工人列表
-│       ├── EventFeedPane.tsx    右下：事件流
-│       ├── InputBox.tsx         底部输入
-│       └── HelpBar.tsx          最底快捷键
+│       └── Splash.tsx           2 秒开场动画
 │
 ├── supervisor.ts              总管大脑：系统提示词 + chat 循环
 └── index.ts                   CLI 入口（TUI 默认 / classic / prompt / probe）
@@ -264,7 +260,8 @@ src/
 | **用户** | 坐在键盘前的那个人，就是你 |
 | **总管**（Sup） | 协调所有工人的角色，由一个 CLI subprocess 承载 |
 | **Adapter** | cowork 主进程和具体 CLI 之间的翻译层，每个 CLI 一份实现 |
-| **工人**（worker） | 被总管管理的 CLI 进程（v0 是 mock） |
+| **工人**（worker） | 被总管管理的 CLI 进程（真 `codex app-server` 或 `claude -p`）|
 | **招工**（spawn） | 开一个新工人 |
 | **MCP server** | 暴露总管工具的独立 stdio 子进程（`@modelcontextprotocol/sdk` 实现）|
-| **mock-daemon** | v0 用的内存假工人池，未来会被 cli-daemon 客户端替换 |
+| **WorkerManager** | 主进程里持有所有真工人的 Map + 事件缓冲 |
+| **IpcServer / IpcClient** | 本地 TCP + UUID token，让 MCP server 子进程打回主进程 |
