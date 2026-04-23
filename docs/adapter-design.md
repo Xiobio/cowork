@@ -249,17 +249,21 @@ codex -c 'mcp_servers.test_server.command="node"' \
 - adapter 里捕获所有未知方法名，记录到事件流但不崩溃
 - `probe()` 里同时记录 codex 版本，不在允许列表里时输出警告但仍然尝试
 
-### 6.4 mock-daemon 跨进程的状态
+### 6.4 跨进程状态 —— 走 IpcServer 回主进程（v3 现状）
 
-MCP server 是 Sup 的子进程，不是 cowork 主进程的子进程。mock-daemon
-的状态活在 MCP server 进程里。
+MCP server 是 Sup 的子进程，不是 cowork 主进程的子进程。早期 v0 里
+工人状态活在 MCP server 进程里（叫 mock-daemon），每次 Sup 重启都
+会丢。v3 的做法不一样：
 
-这意味着：每次 cowork 启动一个新 Sup session，都会启动一个新的 MCP
-server 子进程，mock-daemon 的状态被重置到种子数据。
+- 真工人（RunningSession）由 cowork **主进程**里的 `WorkerManager` 持有
+- 主进程启一个 `IpcServer`（localhost TCP + UUID token）
+- MCP server 子进程启动时从 env 读 `COWORK_IPC_HOST/PORT/TOKEN`，
+  用 `IpcClient` 连回主进程做 RPC
+- 所有工具调用（spawn_worker / list_workers / send_to_worker …）
+  都是打回主进程的 RPC，不是进程内调用
 
-对 v0 阶段无所谓（反正是 demo 数据）。对未来接真工人会成为一个问题：
-session 重启后工人状态应该保留。届时的解法是把 mock-daemon 换成一个
-连 cli-daemon 的薄客户端，状态存在 cli-daemon 那边就跨进程持久了。
+这样 Sup session 重启也不会丢工人状态 —— Sup 是进程里的一个子进程，
+死了主进程里的 WorkerManager 还活着。
 
 ---
 
@@ -270,15 +274,17 @@ src/
 ├── sup-runtime/
 │   ├── types.ts            ← 本文 §2-§3 里的所有接口定义
 │   ├── base.ts             ← BaseRunningSession（§5 里提到的"假抽象"部分）
+│   ├── platform.ts         ← 跨平台 spawn 辅助（findCliBinary 等）
 │   ├── registry.ts         ← adapter 注册表
 │   └── adapters/
 │       ├── codex/
 │       │   ├── index.ts    ← CodexAdapter + CodexSession
 │       │   ├── app-server.ts ← JSON-RPC 2.0 client + 协议类型
+│       │   ├── protocol.ts ← Codex notification 的类型
 │       │   └── parser.ts   ← notification → CanonicalEvent
 │       └── claude-code/
 │           ├── index.ts    ← ClaudeCodeAdapter + ClaudeCodeSession
-│           ├── input.ts    ← user message NDJSON writer
+│           ├── input.ts    ← user message NDJSON writer（Promise 回调）
 │           └── parser.ts   ← stdout NDJSON → CanonicalEvent
 ```
 

@@ -26,14 +26,14 @@ interface Props {
 }
 
 export function Splash({ width, onDone }: Props) {
-  const [phase, setPhase] = useState(0); // 0=blank, 1=logo, 2=tagline, 3=bar
+  // 从 1 开始 —— 首帧就显 logo，不要黑屏 200ms（snapshot 模式也能拍到东西）
+  const [phase, setPhase] = useState(1); // 1=logo, 2=tagline, 3=bar
 
   useEffect(() => {
-    const t1 = setTimeout(() => setPhase(1), 200);
-    const t2 = setTimeout(() => setPhase(2), 700);
-    const t3 = setTimeout(() => setPhase(3), 1200);
-    const t4 = setTimeout(() => onDone(), 2000);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
+    const t2 = setTimeout(() => setPhase(2), 500);
+    const t3 = setTimeout(() => setPhase(3), 1000);
+    const t4 = setTimeout(() => onDone(), 1800);
+    return () => { clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [onDone]);
 
   return (
