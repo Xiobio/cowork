@@ -131,7 +131,12 @@ export class Supervisor {
     this.iter = session.events()[Symbol.asyncIterator]();
   }
 
-  async chat(userMessage: string, observer?: ChatObserver): Promise<ChatResult> {
+  async chat(
+    userMessage: string,
+    observer?: ChatObserver,
+    opts?: { idleTimeoutMs?: number },
+  ): Promise<ChatResult> {
+    const idleMs = opts?.idleTimeoutMs ?? 120_000;
     await this.session.sendUserMessage(userMessage);
 
     const textParts: string[] = [];
@@ -139,7 +144,20 @@ export class Supervisor {
     let stopReason: ChatResult['stopReason'] = 'end_turn';
 
     while (true) {
-      const { value: event, done } = await this.iter.next();
+      // 竞速 idle 超时：CLI 卡死时抛错，别让 chat 永挂。
+      // 注意 orphan waiter 会留在 BaseRunningSession.waiters 里，
+      // 下一次 chat 时会被第一条真正的事件消费掉，可接受。
+      let timer: NodeJS.Timeout | null = null;
+      const timeoutPromise = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new Error(`chat idle timeout after ${idleMs}ms`)), idleMs);
+      });
+      let step: IteratorResult<CanonicalEvent>;
+      try {
+        step = await Promise.race([this.iter.next(), timeoutPromise]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      const { value: event, done } = step;
       if (done) {
         // session 提前退出了，不正常
         stopReason = 'error';

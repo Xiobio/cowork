@@ -299,6 +299,39 @@ async function scenario4_ErrorPaths(round) {
       const rKill2 = await manager.killWorker(zombieName, true);
       if (!rKill2.ok) errors.push(`stopped 工人重复 kill 应幂等成功, 实为 error=${rKill2.error}`);
     }
+
+    // 9. 新 API removeWorker：活工人不能删；stopped 可以删；删完同名可再 spawn
+    const removerName = `${tag}_remove`;
+    const rSpawn = await manager.spawnWorker(removerName, cwd, TRIVIAL_PROMPT);
+    if (!rSpawn.ok) {
+      errors.push(`removeWorker 预 spawn 失败: ${rSpawn.error}`);
+    } else {
+      // 活着的不该允许删
+      const rRmAlive = manager.removeWorker(removerName);
+      if (rRmAlive.ok) errors.push('活工人不应被 removeWorker 接受');
+      // kill 掉再删
+      await manager.killWorker(removerName, true);
+      await waitFor(() => manager.getWorker(removerName)?.state === 'stopped', 2000);
+      const rRmDead = manager.removeWorker(removerName);
+      if (!rRmDead.ok) errors.push(`stopped 工人应可 removeWorker, 实为 ${rRmDead.error}`);
+      if (manager.getWorker(removerName) !== null) errors.push('remove 后 getWorker 应返回 null');
+      // 同名再 spawn 应成功
+      const rRespawn = await manager.spawnWorker(removerName, cwd, TRIVIAL_PROMPT);
+      if (!rRespawn.ok) errors.push(`remove 后同名再 spawn 应成功, 实为 ${rRespawn.error}`);
+    }
+
+    // 10. readEvent 走全局索引：peek 到 id 后 read 应秒回
+    const allWorkers = manager.listWorkers();
+    for (const w of allWorkers) {
+      const events = manager.peekEvents(w.name, { limit: 5 }) ?? [];
+      for (const e of events) {
+        const body = manager.readEvent(e.id);
+        if (!body || body.id !== e.id) {
+          errors.push(`readEvent(${e.id}) 返回不对: ${JSON.stringify(body)}`);
+          break;
+        }
+      }
+    }
   } catch (err) {
     errors.push(`exception: ${err.message}`);
   } finally {

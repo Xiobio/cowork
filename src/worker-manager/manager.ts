@@ -37,6 +37,8 @@ export class WorkerManager implements IWorkerManager {
   private readonly workerCwdRoot: string;
   /** 订阅者：在任何工人状态变化时被调用 */
   private readonly listeners = new Set<() => void>();
+  /** eventId → entry 的全局索引，给 readEvent 做 O(1) 查找 */
+  private readonly eventIndex = new Map<string, WorkerEntry>();
   private nextEventId = 1;
 
   constructor(opts: { adapter: CliAdapter; adapterName: string; workerCwdRoot: string }) {
@@ -95,20 +97,22 @@ export class WorkerManager implements IWorkerManager {
   }
 
   readEvent(eventId: string): ReadEventResult | null {
-    for (const entry of this.workers.values()) {
-      const e = entry.events.find((ev) => ev.id === eventId);
-      if (e) {
-        return {
-          id: e.id,
-          workerName: e.workerName,
-          type: e.type,
-          toolName: e.toolName,
-          body: e.body,
-          ts: e.ts.toISOString(),
-        };
-      }
+    const entry = this.eventIndex.get(eventId);
+    if (!entry) return null;
+    const e = entry.events.find((ev) => ev.id === eventId);
+    if (!e) {
+      // 索引和缓冲不一致（环形缓冲刚好丢掉这一条）
+      this.eventIndex.delete(eventId);
+      return null;
     }
-    return null;
+    return {
+      id: e.id,
+      workerName: e.workerName,
+      type: e.type,
+      toolName: e.toolName,
+      body: e.body,
+      ts: e.ts.toISOString(),
+    };
   }
 
   getSummary(name: string): string | null {
@@ -225,7 +229,8 @@ export class WorkerManager implements IWorkerManager {
       entry.info.state = 'running';
     } catch (err) {
       // 回滚：zombie entry 会让下次同名 spawn 报"已存在"，必须从 map 删掉
-      // 同时把刚 spawn 出来的 session 停了，别漏进程
+      // 同时把刚 spawn 出来的 session 停了，别漏进程和索引
+      for (const e of entry.events) this.eventIndex.delete(e.id);
       this.workers.delete(name);
       try { await session.stop({ timeoutMs: 1000 }); } catch { /* ignore */ }
       this.notify();
@@ -270,6 +275,23 @@ export class WorkerManager implements IWorkerManager {
     await Promise.all(promises);
   }
 
+  /**
+   * 把一个已 stopped 的工人从 map 里彻底删除（释放 name 和 event buffer）。
+   * 活着的工人必须先 killWorker 才能 remove，避免漏进程。
+   */
+  removeWorker(name: string): { ok: true } | { ok: false; error: string } {
+    const entry = this.workers.get(name);
+    if (!entry) return { ok: false, error: `找不到工人 "${name}"` };
+    if (entry.info.state !== 'stopped') {
+      return { ok: false, error: `工人 "${name}" 还活着 (state=${entry.info.state})，先 killWorker` };
+    }
+    for (const e of entry.events) this.eventIndex.delete(e.id);
+    entry.events.length = 0;
+    this.workers.delete(name);
+    this.notify();
+    return { ok: true };
+  }
+
   // ─── 后台事件 reader ──────────────────────────
 
   private async readEventLoop(entry: WorkerEntry): Promise<void> {
@@ -291,8 +313,10 @@ export class WorkerManager implements IWorkerManager {
     if (!stored) return;
 
     entry.events.push(stored);
+    this.eventIndex.set(stored.id, entry);
     if (entry.events.length > EVENT_BUFFER_MAX) {
-      entry.events.splice(0, entry.events.length - EVENT_BUFFER_MAX);
+      const evicted = entry.events.splice(0, entry.events.length - EVENT_BUFFER_MAX);
+      for (const e of evicted) this.eventIndex.delete(e.id);
     }
     entry.info.eventCount++;
     entry.info.lastActivity = stored.ts;
