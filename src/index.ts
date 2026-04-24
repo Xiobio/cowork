@@ -150,6 +150,8 @@ function resolveMcpServerPath(): string {
 function buildMcpServerConfig(
   mcpServerPath: string,
   ipcInfo: IpcServerInfo,
+  mainCwd: string,
+  sessionId: string,
 ): Record<string, McpServerConfig> {
   return {
     cowork_tools: {
@@ -159,6 +161,8 @@ function buildMcpServerConfig(
         COWORK_IPC_HOST: ipcInfo.host,
         COWORK_IPC_PORT: String(ipcInfo.port),
         COWORK_IPC_TOKEN: ipcInfo.token,
+        COWORK_MAIN_CWD: mainCwd,
+        COWORK_SESSION_ID: sessionId,
       },
     },
   };
@@ -229,8 +233,13 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => onSignal('SIGINT'));
   process.on('SIGTERM', () => onSignal('SIGTERM'));
 
-  // 4. 构造 Sup 的 MCP server 配置（带 IPC 环境变量）
-  const mcpServers = buildMcpServerConfig(mcpServerPath, ipcInfo);
+  // 4. 构造 Sup 的 MCP server 配置（带 IPC 环境变量 + 当前 cwd + session id）
+  const mcpServers = buildMcpServerConfig(
+    mcpServerPath,
+    ipcInfo,
+    process.cwd(),
+    sessionBundle.meta.id,
+  );
 
   // 5. TUI snapshot 分支
   if (args.tuiSnapshot) {

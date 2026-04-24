@@ -14,6 +14,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, resolve as pathResolve, join as pathJoin } from 'node:path';
 
 import { IpcClient } from '../worker-manager/ipc-client.js';
 
@@ -41,6 +43,51 @@ function readIpcEnv(): { host: string; port: number; token: string } {
     throw new Error(`COWORK_IPC_PORT 不是数字: ${portStr}`);
   }
   return { host, port, token };
+}
+
+function getMainCwd(): string {
+  // cowork 主进程的 cwd，由 index.ts buildMcpServerConfig 传进来。
+  // 如果 env 丢了就退回 MCP server 自己的 cwd（通常等价）。
+  return process.env.COWORK_MAIN_CWD || process.cwd();
+}
+
+function getSessionId(): string | null {
+  return process.env.COWORK_SESSION_ID || null;
+}
+
+/** 把"当前目录" / 相对路径 解析成绝对路径。不存在的路径也原样返回不校验（spawn 会再报错）。*/
+function resolveWorkerCwd(input: string): string {
+  const mainCwd = getMainCwd();
+  const trimmed = input.trim();
+  if (!trimmed || trimmed === '.' || trimmed === './' || trimmed === '当前目录') {
+    return mainCwd;
+  }
+  if (isAbsolute(trimmed)) return trimmed;
+  return pathResolve(mainCwd, trimmed);
+}
+
+/** 读当前 session 的 chat.jsonl 给 Sup 作为"上次做了什么"的记忆 */
+function loadChatHistoryText(limit: number): string {
+  const sid = getSessionId();
+  if (!sid) return '(无 session id，读不到历史)';
+  const p = pathJoin(getMainCwd(), '.cowork', 'sessions', sid, 'chat.jsonl');
+  if (!existsSync(p)) return '(本 session 还没有历史对话)';
+  const raw = readFileSync(p, 'utf8');
+  const lines: string[] = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const entry = JSON.parse(t) as { role: string; text: string; ts: string };
+      const tag = entry.role === 'user' ? '你' : '总管';
+      const ts = entry.ts ? ` [${entry.ts}]` : '';
+      lines.push(`${tag}${ts}:\n${entry.text}`);
+    } catch {
+      /* skip bad line */
+    }
+  }
+  const tail = lines.slice(-limit);
+  return tail.join('\n\n---\n\n') || '(无历史)';
 }
 
 async function main(): Promise<void> {
@@ -171,15 +218,15 @@ async function main(): Promise<void> {
     'spawn_worker',
     {
       description:
-        '招一个新工人。这会**真的启动一个新的 CLI subprocess**（Codex 或 Claude Code，取决于 cowork 的配置），它会跑用户给的任务。需要：名字（用户起的）、工作目录绝对路径、初始任务描述。注意：不要为 demo 目的乱招，每个工人都是真实的订阅配额消耗。',
+        '招一个新工人。这会**真的启动一个新的 CLI subprocess**（Codex 或 Claude Code，取决于 cowork 的配置），它会跑用户给的任务。需要：名字（用户起的）、工作目录、初始任务描述。cwd 可以是绝对路径，也可以是相对于 cowork 主进程 cwd 的相对路径（"." 或 "./" 或 "当前目录" = 直接用主进程 cwd）。工人会被放进那个目录执行。注意：不要为 demo 目的乱招，每个工人都是真实的订阅配额消耗。',
       inputSchema: {
         name: z.string().describe('新工人的名字，必须和现有工人不重名'),
-        cwd: z.string().describe('工作目录绝对路径'),
+        cwd: z.string().describe('工作目录。可以是绝对路径，相对路径（基于 cowork 主进程 cwd 解析），或 "." / "当前目录" 表示直接用主进程 cwd'),
         initial_prompt: z.string().describe('给新工人的第一个任务描述'),
       },
     },
     async ({ name, cwd, initial_prompt }) =>
-      tool('spawn_worker', { name, cwd, initial_prompt }),
+      tool('spawn_worker', { name, cwd: resolveWorkerCwd(cwd), initial_prompt }),
   );
 
   server.registerTool(
@@ -193,6 +240,30 @@ async function main(): Promise<void> {
       },
     },
     async ({ name, graceful }) => tool('kill_worker', { name, graceful: graceful ?? true }),
+  );
+
+  // ─── 环境类（本地，不走 IPC）──────────────────────────────
+
+  server.registerTool(
+    'get_cwd',
+    {
+      description:
+        '获取 cowork 主进程的工作目录（用户启动 cowork 时所在的目录）。用户说"当前目录"就是指这个。spawn_worker 其实也支持相对路径或 "."，你不用每次都问用户要绝对路径。',
+      inputSchema: {},
+    },
+    async () => text(getMainCwd()),
+  );
+
+  server.registerTool(
+    'get_session_history',
+    {
+      description:
+        '读当前 session 的历史对话记录（你和用户之前说过什么，包括上次打开 cowork 的内容）。用户问"上次做了什么"、"还记得吗"这类话时调这个工具把记忆找回来。返回的是按时间排序的人话文本，不是事件流。limit 控制返回最近多少条。',
+      inputSchema: {
+        limit: z.number().int().min(1).max(200).optional().describe('返回最近多少条消息，默认 50'),
+      },
+    },
+    async ({ limit }) => text(loadChatHistoryText(limit ?? 50)),
   );
 
   // ─── 记忆类 ──────────────────────────────────
@@ -235,7 +306,7 @@ async function main(): Promise<void> {
     async ({ key }) => tool('get_note', { key }),
   );
 
-  log('注册了 12 个工具，连接 stdio transport');
+  log('注册了 14 个工具，连接 stdio transport');
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log('MCP server ready');
