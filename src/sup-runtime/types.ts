@@ -114,6 +114,12 @@ export interface SpawnOptions {
   model?: string;
   /** 可选：额外 env var（注入到 CLI 子进程） */
   env?: Record<string, string>;
+  /**
+   * 可选：resume 已有 CLI 会话。对 claude 生效（传 --resume <id>），
+   * 对 codex app-server 目前被忽略（协议里没 resume 路径，以 UI-level
+   * get_session_history 弥补）。
+   */
+  resumeCliSessionId?: string | null;
 }
 
 // ─── Running session interface ──────────────────────────────────

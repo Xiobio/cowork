@@ -20,7 +20,7 @@ import type {
   SessionMeta,
   WorkerSnapshot,
 } from '../session/storage.js';
-import { appendChat, saveWorkers } from '../session/storage.js';
+import { appendChat, saveWorkers, updateMeta } from '../session/storage.js';
 import { Splash } from './components/Splash.js';
 import { Markdown } from './components/Markdown.js';
 import { reducer, initialState, mkMessageId, seedMessageId } from './state.js';
@@ -85,6 +85,25 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
   useLayoutEffect(() => {
     dispatch({ type: 'session-started', cliSessionId: session.cliSessionId ?? '', pid: session.pid });
     dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
+
+    // Sup 的 cliSessionId 多半要等 session_started 事件才填上。
+    // 每 500ms 轮询一次，拿到就存回 meta 给下次 resume 用，最多 15 次
+    // （7.5 秒）还没拿到就放弃 —— CLI 八成不产 session_id，resume 也没意义。
+    if (session.cliSessionId) {
+      updateMeta(process.cwd(), persistence.meta.id, { supCliSessionId: session.cliSessionId });
+    } else {
+      let tries = 0;
+      const timer = setInterval(() => {
+        tries++;
+        if (session.cliSessionId) {
+          updateMeta(process.cwd(), persistence.meta.id, { supCliSessionId: session.cliSessionId });
+          clearInterval(timer);
+        } else if (tries >= 15) {
+          clearInterval(timer);
+        }
+      }, 500);
+      return () => clearInterval(timer);
+    }
 
     // resume 场景：回放 chat 历史 + 把历史工人塞进 dormantWorkers
     if (persistence.resumed && persistence.bundle) {
@@ -268,12 +287,22 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       if (!dormant) {
         hint = `找不到历史工人 "${name}"。当前 dormant：${state.dormantWorkers.map((w) => w.name).join(', ') || '(无)'}`;
       } else {
-        const r = await manager.spawnWorker(dormant.name, dormant.cwd, dormant.initialPrompt);
+        // 如果 dormant 有 cliSessionId 且 adapter 是 claude，带着 --resume 起
+        // （codex 的 app-server 忽略，adapter 层会 warn）
+        const r = await manager.spawnWorker(
+          dormant.name,
+          dormant.cwd,
+          dormant.initialPrompt,
+          { resumeCliSessionId: dormant.cliSessionId ?? null },
+        );
         if (!r.ok) {
           hint = `spawn 失败：${r.error}`;
         } else {
           dispatch({ type: 'remove-dormant', name });
-          hint = `已重新招 "${name}"（cwd=${dormant.cwd}，同原始 prompt）。注意工人不会恢复之前的 LLM 对话上下文（phase 2 做），但它会从 cwd 里已有文件看到之前的工作成果。`;
+          const resumedNote = dormant.cliSessionId
+            ? `已尝试 resume 它之前的 CLI 会话（id=${dormant.cliSessionId.slice(0, 12)}…，仅 claude 生效）。如果 resume 失败会自动 fallback 新开。`
+            : `没有历史 cliSessionId，按新会话启动。`;
+          hint = `已重新招 "${name}"（cwd=${dormant.cwd}，同原始 prompt）。${resumedNote}`;
         }
       }
       dispatch({ type: 'sup-text-final', messageId: id, text: hint });

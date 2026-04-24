@@ -342,7 +342,26 @@ async function scenario4_ErrorPaths(round) {
       }
     }
 
-    // 11. sweepStopped(0) 应立即清掉所有 stopped 工人
+    // 11. 带 resumeCliSessionId 的 spawn（phase 2 路径）不应该崩。
+    //     传一个假 id，claude adapter 会走 --resume fallback，或者直接失败；
+    //     我们只验 spawnWorker 的 try/catch 能把这个变成返回 {ok:true/false}，
+    //     不会 unhandled throw。
+    const resumeName = `${tag}_resume`;
+    const rR = await manager.spawnWorker(resumeName, cwd, TRIVIAL_PROMPT, {
+      resumeCliSessionId: '00000000-0000-0000-0000-000000000000', // 假 UUID
+    });
+    if (!rR.ok) {
+      // 预期：假 id claude 会退出 → spawnWorker fallback 到不带 resume 再试，
+      // 再不行才返回 error。如果返回 error 不是 unhandled throw，就算 pass。
+      // 简单起见接受任何 {ok:true|false} 形状即可。
+      if (typeof rR.ok !== 'boolean') errors.push('resume spawn 返回值形状坏');
+    } else {
+      // 成功的话，kill 掉别漏进程
+      await manager.killWorker(resumeName, true);
+      await waitFor(() => manager.getWorker(resumeName)?.state === 'stopped', 2000);
+    }
+
+    // 12. sweepStopped(0) 应立即清掉所有 stopped 工人
     const sweepName = `${tag}_sweep`;
     const rSw = await manager.spawnWorker(sweepName, cwd, TRIVIAL_PROMPT);
     if (!rSw.ok) {

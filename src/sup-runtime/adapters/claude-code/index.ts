@@ -90,6 +90,13 @@ export class ClaudeCodeAdapter implements CliAdapter {
       args.push('--system-prompt', opts.systemPrompt);
     }
 
+    // resume 已有会话 —— 把对话历史从 Claude 那边的 session store 读出来
+    // 塞进 LLM context。如果 id 无效 claude 会直接退出，调用方捕获到 spawn
+    // 失败会 fallback 到不带 --resume 重来。
+    if (opts.resumeCliSessionId) {
+      args.push('--resume', opts.resumeCliSessionId);
+    }
+
     // 空 mcpServers = 不注入任何 MCP（工人场景）
     if (Object.keys(opts.mcpServers).length > 0) {
       args.push('--mcp-config', JSON.stringify(mcpConfig));

@@ -83,6 +83,13 @@ export class CodexAdapter implements CliAdapter {
     if (!binaryPath) {
       throw new Error('codex 不在 PATH 中，无法启动');
     }
+    // codex app-server 协议目前没有 resume 路径，收到 resumeCliSessionId 只能
+    // 打个 note 忽略。UI 层靠 chat 回放 + get_session_history 工具补偿。
+    if (opts.resumeCliSessionId) {
+      process.stderr.write(
+        `[codex-adapter] note: resume not supported in app-server mode, ignoring session id ${opts.resumeCliSessionId}\n`,
+      );
+    }
     const args = buildCodexArgs(opts);
     // cross-spawn 在 Windows 上会自动把 .cmd 脚本转成合适的 cmd.exe 调用，
     // 并正确处理 args 里的特殊字符（包括我们 TOML 里的 " 和 []）。

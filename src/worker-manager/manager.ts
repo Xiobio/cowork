@@ -217,6 +217,7 @@ export class WorkerManager implements IWorkerManager {
     name: string,
     cwd: string,
     initialPrompt: string,
+    opts?: { resumeCliSessionId?: string | null },
   ): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
     if (this.workers.has(name)) {
       return { ok: false, error: `工人 "${name}" 已存在` };
@@ -230,9 +231,23 @@ export class WorkerManager implements IWorkerManager {
         cwd,
         // 工人不需要访问 cowork 的 MCP 工具（那是总管的事）
         mcpServers: {},
+        resumeCliSessionId: opts?.resumeCliSessionId ?? null,
       });
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      // resume 失败就 fallback 新开
+      if (opts?.resumeCliSessionId) {
+        try {
+          session = await this.adapter.spawn({
+            systemPrompt: '',
+            cwd,
+            mcpServers: {},
+          });
+        } catch (err2) {
+          return { ok: false, error: err2 instanceof Error ? err2.message : String(err2) };
+        }
+      } else {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     }
 
     const info: WorkerInfo = {
