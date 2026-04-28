@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs';
 
 import { Supervisor, SUPERVISOR_SYSTEM_PROMPT, type ChatObserver } from './supervisor.js';
 import { getAdapter, listAdapters } from './sup-runtime/registry.js';
+import { cleanupOrphansSync, installSafetyNet, killAllSync, killOtherCoworkMainsSync } from './sup-runtime/process-registry.js';
 import type { CliAdapter, McpServerConfig, SpawnOptions } from './sup-runtime/types.js';
 import { WorkerManager } from './worker-manager/manager.js';
 import { IpcServer, type IpcServerInfo } from './worker-manager/ipc-server.js';
@@ -55,6 +56,8 @@ interface CliArgs {
   sessionId: string | null;
   /** --list-sessions: 打印本目录下所有 session 列表后退出 */
   listSessions: boolean;
+  /** --clean-orphans: 杀所有其它 cowork main 进程及其子进程，然后退出 */
+  cleanOrphans: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -70,6 +73,7 @@ function parseArgs(argv: string[]): CliArgs {
     newSession: false,
     sessionId: null,
     listSessions: false,
+    cleanOrphans: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -97,6 +101,8 @@ function parseArgs(argv: string[]): CliArgs {
       args.sessionId = a.slice('--session='.length);
     } else if (a === '--list-sessions') {
       args.listSessions = true;
+    } else if (a === '--clean-orphans') {
+      args.cleanOrphans = true;
     } else if (a === '--verbose' || a === '-v') {
       args.verbose = true;
     } else if (a === '--help' || a === '-h') {
@@ -117,6 +123,7 @@ function printHelp(): void {
   npm run dev -- --new                 强制新开一个 session（不 resume）
   npm run dev -- --session <id>        resume 指定的 session（--list-sessions 看 id）
   npm run dev -- --list-sessions       列出本目录下所有 session
+  npm run dev -- --clean-orphans       Windows: 杀掉其它 cowork main 进程及其子进程后退出
   npm run dev -- --adapter=<name>      切换 adapter
   npm run dev -- --classic             退到纯 readline 聊天（调试用）
   npm run dev -- --prompt "问题"       单次模式：发一句话拿答案就退出
@@ -171,6 +178,16 @@ function buildMcpServerConfig(
 // ─── 主流程 ──────────────────────────────────
 
 async function main(): Promise<void> {
+  // 第一时间装兜底网：异常退出 / 终端关闭时同步 taskkill 残留
+  installSafetyNet();
+
+  // Windows: 清扫上次异常退出留下的孤儿（commandline 匹配 cowork 风格，
+  // 不会误杀用户其他 claude/codex 进程）
+  const orphans = cleanupOrphansSync();
+  if (orphans.killed > 0) {
+    console.log(`[cowork] 清掉了 ${orphans.killed} 个上次遗留的孤儿 CLI 进程`);
+  }
+
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
@@ -185,6 +202,14 @@ async function main(): Promise<void> {
 
   if (args.listSessions) {
     printSessionList();
+    return;
+  }
+
+  if (args.cleanOrphans) {
+    const r1 = killOtherCoworkMainsSync();
+    const r2 = cleanupOrphansSync();
+    console.log(`清掉 ${r1.killed} 个 cowork main 进程及其子进程；另扫到 ${r2.killed} 个孤儿 CLI`);
+    if (r1.pids.length > 0) console.log(`cowork main pid: ${r1.pids.join(', ')}`);
     return;
   }
 
@@ -224,8 +249,10 @@ async function main(): Promise<void> {
   const cleanup = async (): Promise<void> => {
     if (cleanedUp) return;
     cleanedUp = true;
-    await manager.stopAll();
-    await ipc.stop();
+    try { await manager.stopAll(); } catch { /* ignore */ }
+    try { await ipc.stop(); } catch { /* ignore */ }
+    // 兜底：万一 stopAll 漏了什么（比如 Sup 的 child 没被 manager 管），同步 taskkill
+    killAllSync();
   };
   const onSignal = (sig: NodeJS.Signals): void => {
     void cleanup().then(() => process.exit(sig === 'SIGINT' ? 130 : 0));

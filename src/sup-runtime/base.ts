@@ -10,11 +10,39 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { spawn as nativeSpawn } from 'node:child_process';
+import { track as trackPid, untrack as untrackPid } from './process-registry.js';
 import type {
   CanonicalEvent,
   RunningSession,
   SessionExitInfo,
 } from './types.js';
+
+const IS_WINDOWS = process.platform === 'win32';
+
+/**
+ * Windows 专用：杀进程树。cross-spawn 跑 .cmd 时套了一层 cmd.exe，
+ * child.kill 只能杀掉 cmd.exe，下面真正的 CLI 进程会成孤儿。
+ * 用 taskkill /T /F 才能整棵树清掉。
+ *
+ * 注意：Windows console 进程对 WM_CLOSE（taskkill 不带 /F）几乎不响应，
+ * graceful 模式实际是 theater —— 都得等到 timeout 才真死。这里直接 /F
+ * 一次到位，TerminateProcess 不给清理机会，但 cowork 的 CLI 子进程都是
+ * stateless 的（codex/claude 没有自己的需要 flush 的状态），可以接受。
+ */
+function killTreeWindows(pid: number): void {
+  if (pid <= 0) return;
+  try {
+    const child = nativeSpawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+      detached: true,
+    });
+    child.unref();
+  } catch {
+    /* ignore */
+  }
+}
 
 type Waiter = {
   resolve: (v: IteratorResult<CanonicalEvent>) => void;
@@ -38,6 +66,9 @@ export abstract class BaseRunningSession implements RunningSession {
     this.child = child;
     this.pid = child.pid ?? -1;
 
+    // 注册到全局表，process.on('exit') 兜底 taskkill 用
+    trackPid(this.pid);
+
     // child.stdin 必须挂 error listener，否则在 pipe 已关闭后继续 write
     // 会抛 EPIPE，node 因无 listener 直接 crash 整个进程。
     // 这里把任何 stdin/stdout/stderr 的 io 错误吞掉：真正的异常会通过
@@ -50,6 +81,7 @@ export abstract class BaseRunningSession implements RunningSession {
     this.exitPromise = new Promise<SessionExitInfo>((resolve) => {
       child.on('exit', (code, signal) => {
         this.exitInfo = { code, signal };
+        untrackPid(this.pid);
         this.enqueueEvent({
           type: 'session_stopped',
           exitCode: code,
@@ -125,19 +157,20 @@ export abstract class BaseRunningSession implements RunningSession {
 
     const timeoutMs = opts.timeoutMs ?? 3000;
 
-    // 先发 SIGINT，给 CLI 优雅退出的机会
-    try {
-      this.child.kill('SIGINT');
-    } catch {
-      // 已经死了就 ok
+    if (IS_WINDOWS) {
+      // Windows 直接 taskkill /T /F —— graceful 在 console 进程上不工作
+      killTreeWindows(this.pid);
+    } else {
+      // Unix 给 CLI 一次 SIGINT 机会，不行再 SIGKILL
+      try { this.child.kill('SIGINT'); } catch { /* ok */ }
     }
 
-    // 到点还没死就 SIGKILL
+    // 到点还没死就强杀（Unix；Windows 上 /F 已经是强杀，timer 是兜底）
     const timer = setTimeout(() => {
-      try {
-        this.child.kill('SIGKILL');
-      } catch {
-        // 同上
+      if (IS_WINDOWS) {
+        killTreeWindows(this.pid); // 再 /F 一次防漏
+      } else {
+        try { this.child.kill('SIGKILL'); } catch { /* ok */ }
       }
     }, timeoutMs);
 
