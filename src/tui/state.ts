@@ -53,6 +53,8 @@ export interface AppState {
   currentTurnStart: number | null;
   /** 累计 usage（仅 claude adapter 有值；codex 待补） */
   cumulativeUsage: { inputTokens: number; outputTokens: number; costUsd: number };
+  /** 最近一个 turn 的 input tokens（≈ 当前 context 占用，含 cache）；codex 暂无值时为 0 */
+  lastTurnContextTokens: number;
 }
 
 const CHAT_MAX = 100; // 永远保留最后 N 条消息在内存里
@@ -72,6 +74,7 @@ export const initialState = (adapterName: string, adapterDisplayName: string): A
   lastError: null,
   currentTurnStart: null,
   cumulativeUsage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+  lastTurnContextTokens: 0,
 });
 
 // ─── Actions ─────────────────────────────────────
@@ -169,7 +172,13 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
 
-    case 'sup-turn-completed':
+    case 'sup-turn-completed': {
+      // context 占用 = 这一轮的 input + cache（cache 也算 context 长度）
+      const contextThisTurn = action.usage
+        ? action.usage.inputTokens +
+          (action.usage.cacheReadTokens ?? 0) +
+          (action.usage.cacheCreateTokens ?? 0)
+        : state.lastTurnContextTokens;
       return {
         ...state,
         status: { kind: 'ready' },
@@ -183,10 +192,12 @@ export function reducer(state: AppState, action: Action): AppState {
               costUsd: state.cumulativeUsage.costUsd + (action.usage.costUsd ?? 0),
             }
           : state.cumulativeUsage,
+        lastTurnContextTokens: contextThisTurn,
         chat: state.chat.map((m) =>
           m.id === action.messageId && m.streaming ? { ...m, streaming: false } : m,
         ),
       };
+    }
 
     case 'tool-call': {
       // 同时把工具调用作为 'tool' role 消息追加到 chat，让用户看到 Sup 在干啥

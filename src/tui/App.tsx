@@ -53,6 +53,7 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/respawn',  usage: '/respawn <名字>', desc: '用历史工人的 cwd+prompt 重新拉起' },
   { name: '/sessions', usage: '/sessions',       desc: '列本目录下所有 session（带 chat 数）' },
   { name: '/persona',  usage: '/persona [id]',   desc: '看/切换 Sup 人设（10 套）' },
+  { name: '/usage',    usage: '/usage',          desc: '看 token 用量和估算成本' },
   { name: '/new',      usage: '/new',            desc: '提示如何新开 session' },
 ];
 
@@ -86,6 +87,7 @@ const HELP_TEXT = `## 试玩建议
 ## Session
 
   /sessions            列本目录所有 session（带 chat 数）
+  /usage               看 token 累计 + 当前 context 占用
   /new                 提示如何开新 session
   /quit /exit          退出（停所有工人；session 自动保存，下次 resume）
 
@@ -412,6 +414,35 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
               `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启** cowork 才会生效。`;
       }
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
+    if (trimmed === '/usage') {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const ctxTokens = state.lastTurnContextTokens;
+      const ctxPct = ctxTokens > 0 ? Math.round((ctxTokens / 200_000) * 100) : 0;
+      const lines: string[] = [];
+      lines.push('## Token 用量');
+      lines.push('');
+      lines.push(`| 项目 | 值 |`);
+      lines.push(`|---|---|`);
+      lines.push(`| 当前 context（约） | ${formatTokens(ctxTokens)} / 200k (${ctxPct}%) |`);
+      lines.push(`| 累计 input | ${formatTokens(state.cumulativeUsage.inputTokens)} |`);
+      lines.push(`| 累计 output | ${formatTokens(state.cumulativeUsage.outputTokens)} |`);
+      lines.push(`| 累计成本（如 CLI 给） | $${state.cumulativeUsage.costUsd.toFixed(4)} |`);
+      lines.push('');
+      lines.push('注意：');
+      lines.push('- claude adapter 从 result.usage 解析；codex adapter 部分版本不报，会显示 0');
+      lines.push('- ctx % 按 200k 默认上下文窗口估算（claude sonnet/opus 都是这个量级）');
+      lines.push('- 工人不计入这里 —— 工人在 task 面板各自有 token 列');
+      const out = lines.join('\n');
       dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, out);
@@ -984,8 +1015,11 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
               ? '↵ 排队 · Esc 取消当前回复 · Tab 任务 · Ctrl+C 退出'
               : '↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令'}
           {queueLen > 0 ? `  · queued: ${queueLen}` : ''}
-          {state.cumulativeUsage.inputTokens > 0
-            ? `  · ${formatTokens(state.cumulativeUsage.inputTokens)}↑ ${formatTokens(state.cumulativeUsage.outputTokens)}↓` +
+          {state.lastTurnContextTokens > 0
+            ? `  · ctx ${formatTokens(state.lastTurnContextTokens)}/200k (${Math.round((state.lastTurnContextTokens / 200_000) * 100)}%)`
+            : ''}
+          {state.cumulativeUsage.outputTokens > 0
+            ? `  · ${formatTokens(state.cumulativeUsage.outputTokens)}↓` +
               (state.cumulativeUsage.costUsd > 0 ? ` · $${state.cumulativeUsage.costUsd.toFixed(3)}` : '')
             : ''}
         </Text>

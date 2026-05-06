@@ -167,7 +167,25 @@ export function parseTurnCompleted(params: TurnCompletedNotification): Canonical
     default:
       stopReason = 'end_turn';
   }
-  return [{ type: 'turn_completed', stopReason, ts: now() }];
+
+  // best-effort 提取 usage：codex 在 turn 上挂的 usage 对象
+  // 试几个常见 key（字段位置随版本可能变；不存在就无）
+  const turn = params.turn as Record<string, unknown>;
+  const usageRaw = (turn.usage ?? turn.tokenUsage ?? turn.token_usage) as Record<string, unknown> | undefined;
+  let usage: import('../../types.js').TurnUsage | undefined;
+  if (usageRaw && typeof usageRaw === 'object') {
+    const inputTokens = numOr(usageRaw.input_tokens ?? usageRaw.inputTokens ?? usageRaw.prompt_tokens, 0);
+    const outputTokens = numOr(usageRaw.output_tokens ?? usageRaw.outputTokens ?? usageRaw.completion_tokens, 0);
+    if (inputTokens > 0 || outputTokens > 0) {
+      usage = { inputTokens, outputTokens };
+    }
+  }
+
+  return [{ type: 'turn_completed', stopReason, ts: now(), ...(usage ? { usage } : {}) }];
+}
+
+function numOr(v: unknown, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
 
 export function parseError(params: ErrorNotification): CanonicalEvent[] {
