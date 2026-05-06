@@ -11,7 +11,7 @@ import { Box, Text, Static, useApp, useInput, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import { MultilineInput } from './components/MultilineInput.js';
 
-import type { Supervisor, ChatObserver } from '../supervisor.js';
+import { buildSupervisorPrompt, type Supervisor, type ChatObserver } from '../supervisor.js';
 import type { RunningSession } from '../sup-runtime/types.js';
 import type { WorkerManager } from '../worker-manager/manager.js';
 import type { WorkerInfo } from '../worker-manager/types.js';
@@ -23,6 +23,7 @@ import type {
 import {
   appendChat,
   chatFilePath,
+  loadProjectMd,
   projectMdExists,
   projectMdPath,
   saveCompact,
@@ -69,6 +70,7 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/export',   usage: '/export',         desc: '打印当前 session chat.jsonl 路径' },
   { name: '/version',  usage: '/version',        desc: '看 cowork 和已注册 adapter 版本' },
   { name: '/init',     usage: '/init',           desc: '在 cwd 生成 cowork.md 模板（项目级背景）' },
+  { name: '/prompt',   usage: '/prompt',         desc: '看 Sup 当前的 system prompt（验证 persona/cowork.md/carryover）' },
   { name: '/feedback', usage: '/feedback',       desc: '反馈 bug / 建议（打印 GitHub issues 链接）' },
   { name: '/search',   usage: '/search <文本>',  desc: '在当前 session 的 chat 历史里搜关键词' },
   { name: '/new',      usage: '/new',            desc: '提示如何新开 session' },
@@ -113,6 +115,7 @@ const HELP_TEXT = `## 试玩建议
   /export              打印当前 session 的 chat.jsonl 路径
   /version             看 cowork / adapter / persona 版本信息
   /init                在 cwd 生成 cowork.md 项目背景模板
+  /prompt              看 Sup 当前的 system prompt（验证 cowork.md / carryover）
   /feedback            反馈 bug / 建议（打印 issues 链接）
   /search <关键词>      在当前 session chat 历史里搜
   /new                 提示如何开新 session
@@ -525,6 +528,35 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       lines.push(`- persona: ${getPersonaOrDefault(persistence.meta.personaId).id}`);
       lines.push(`- node: ${process.version}`);
       lines.push(`- platform: ${process.platform}`);
+      replyLocally(trimmed, lines.join('\n'));
+      return;
+    }
+
+    if (trimmed === '/prompt') {
+      // 重建 spawn 时用过的 system prompt（仅供查看，不影响在跑的 Sup）
+      const fullPrompt = buildSupervisorPrompt(
+        persistence.meta.personaId,
+        persistence.meta.compactedSummary,
+        loadProjectMd(cwd),
+      );
+      const lines: string[] = [];
+      lines.push('## Sup 当前 system prompt');
+      lines.push('');
+      lines.push(`长度：${fullPrompt.length} 字`);
+      lines.push('');
+      lines.push('包含：');
+      const hasProjectMd = !!loadProjectMd(cwd);
+      const hasCarryover = !!persistence.meta.compactedSummary;
+      lines.push(`- ${hasProjectMd ? '✓' : '✗'} 项目背景（cowork.md）`);
+      lines.push(`- ${hasCarryover ? '✓' : '✗'} 上次 /compact 摘要`);
+      lines.push(`- ✓ persona identity (${persistence.meta.personaId ?? 'office'})`);
+      lines.push(`- ✓ BASE_RULES（操作规则）`);
+      lines.push('');
+      lines.push('### 完整 prompt');
+      lines.push('');
+      lines.push('```');
+      lines.push(fullPrompt);
+      lines.push('```');
       replyLocally(trimmed, lines.join('\n'));
       return;
     }
