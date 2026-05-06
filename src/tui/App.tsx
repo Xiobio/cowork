@@ -788,25 +788,24 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         </Box>
       )}
 
-      {/* Slash 命令补全 dropdown —— 走 Claude Code 风：背景色高亮、紧凑、无 header */}
+      {/* 输入框 —— 总是显示，chatting 时提交到队列而不是立即发送 */}
+      <Box paddingX={1}>
+        <Text color={isChatting ? 'yellow' : 'cyan'} bold>&gt; </Text>
+        <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} placeholder={isChatting ? '总管还在回复中，你可以继续打字，会排队...' : ''} />
+      </Box>
+
+      {/* Slash 命令补全 dropdown —— 在输入框**下方**，走 Claude Code 风：
+          inverse 高亮当前行（背景色跟终端主题走，黑底白字 ↔ 白底黑字 自动切换） */}
       {slashMenuOpen && (
         <Box flexDirection="column" paddingX={1}>
           {slashMatches.map((cmd, i) => {
             const focused = i === slashCursor;
-            // 整行（usage + desc）一起套 backgroundColor，做出"高亮整条"的效果
             return (
               <Box key={cmd.name}>
-                <Text
-                  backgroundColor={focused ? 'cyan' : undefined}
-                  color={focused ? 'black' : 'cyan'}
-                >
-                  {' ' + cmd.usage.padEnd(22)}
+                <Text inverse={focused}>
+                  {' ' + cmd.usage.padEnd(22) + ' '}
                 </Text>
-                <Text
-                  backgroundColor={focused ? 'cyan' : undefined}
-                  color={focused ? 'black' : undefined}
-                  dimColor={!focused}
-                >
+                <Text inverse={focused} dimColor={!focused}>
                   {cmd.desc + ' '}
                 </Text>
               </Box>
@@ -814,12 +813,6 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
           })}
         </Box>
       )}
-
-      {/* 输入框 —— 总是显示，chatting 时提交到队列而不是立即发送 */}
-      <Box paddingX={1}>
-        <Text color={isChatting ? 'yellow' : 'cyan'} bold>&gt; </Text>
-        <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} placeholder={isChatting ? '总管还在回复中，你可以继续打字，会排队...' : ''} />
-      </Box>
 
       {/* 底部提示 */}
       <Text dimColor>{line}</Text>
