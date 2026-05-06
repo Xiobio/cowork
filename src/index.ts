@@ -329,6 +329,7 @@ async function main(): Promise<void> {
     ),
     cwd: process.cwd(),
     mcpServers,
+    ...(sessionBundle.meta.model ? { model: sessionBundle.meta.model } : {}),
   };
 
   let session;

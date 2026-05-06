@@ -64,6 +64,7 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/respawn',  usage: '/respawn <名字>', desc: '用历史工人的 cwd+prompt 重新拉起' },
   { name: '/sessions', usage: '/sessions',       desc: '列本目录下所有 session（带 chat 数）' },
   { name: '/persona',  usage: '/persona [id]',   desc: '看/切换 Sup 人设（10 套）' },
+  { name: '/model',    usage: '/model [id]',     desc: '看/切换 Sup 用的 LLM 模型（重启生效）' },
   { name: '/usage',    usage: '/usage',          desc: '看 token 用量和估算成本（同 /cost）' },
   { name: '/cost',     usage: '/cost',           desc: '同 /usage' },
   { name: '/compact',  usage: '/compact',        desc: '让 Sup 总结对话要点保存（新 session 起点）' },
@@ -126,6 +127,7 @@ const HELP_TEXT = `## 试玩建议
   /help                看本帮助
   /clear               清屏（不影响 session 历史）
   /persona [id]        切 Sup 人设（10 套，不带参数弹选择器）
+  /model [id]          切 Sup 用的 LLM 模型（重启生效；不带参数看当前）
 
 ## 快捷键
 
@@ -532,6 +534,27 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       return;
     }
 
+    if (trimmed === '/model' || trimmed.startsWith('/model ')) {
+      const arg = trimmed.slice('/model'.length).trim();
+      const current = persistence.meta.model ?? '(默认)';
+      let out: string;
+      if (!arg) {
+        out = `当前模型：**${current}**\n\n` +
+              `用法：\n` +
+              `- \`/model <id>\` 设置模型（如 claude-sonnet-4-5、claude-opus-4-7、gpt-5）\n` +
+              `- \`/model default\` 或 \`/model -\` 清空回 CLI 默认\n\n` +
+              `**注意**：当前 Sup 已经 spawn，要 /quit 重启才会用新模型。`;
+      } else if (arg === 'default' || arg === '-' || arg === 'reset') {
+        updateMeta(cwd, persistence.meta.id, { model: undefined });
+        out = `已清空模型设置，下次启动用 CLI 默认。`;
+      } else {
+        updateMeta(cwd, persistence.meta.id, { model: arg });
+        out = `已设置模型为 \`${arg}\`。\n\n要让它对当前 Sup 生效：/quit 后 \`npm run dev\` 重启。`;
+      }
+      replyLocally(trimmed, out);
+      return;
+    }
+
     if (trimmed === '/prompt') {
       // 重建 spawn 时用过的 system prompt（仅供查看，不影响在跑的 Sup）
       const fullPrompt = buildSupervisorPrompt(
@@ -583,6 +606,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       lines.push('');
       lines.push(`- adapter: **${adapter.displayName}** (${adapter.name}) · midTurnInterrupt=${adapter.midTurnInterrupt}`);
       lines.push(`- persona: **${getPersonaOrDefault(persistence.meta.personaId).name}** (${persistence.meta.personaId ?? 'office'})`);
+      lines.push(`- model: ${persistence.meta.model ?? '(CLI 默认)'}`);
       lines.push(`- session: \`${persistence.meta.id}\``);
       lines.push(`- repo: https://github.com/Xiobio/cowork`);
       replyLocally(trimmed, lines.join('\n'));

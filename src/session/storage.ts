@@ -46,6 +46,8 @@ export interface SessionMeta {
   personaId?: string;
   /** /compact 生成的对话要点摘要，新 Sup 重启时可作为前置 context */
   compactedSummary?: string;
+  /** 指定的 LLM 模型 id（adapter 透传给 CLI 的 --model）。空 = 用 CLI 默认 */
+  model?: string;
 }
 
 export interface ChatEntry {

@@ -58,6 +58,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
       cwd: process.cwd(),
       mcpServers,
       resumeCliSessionId: resumeId,
+      ...(opts.session.meta.model ? { model: opts.session.meta.model } : {}),
     });
   } catch (err) {
     console.error('启动 Sup 失败:', err instanceof Error ? err.message : String(err));
