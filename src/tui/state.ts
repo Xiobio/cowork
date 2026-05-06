@@ -18,10 +18,16 @@ export type Status =
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'sup';
+  role: 'user' | 'sup' | 'tool';
   text: string;
   ts: Date;
   streaming?: boolean;
+  /** role==='tool' 才有：工具名（短名，已经 shortenToolName 过） */
+  toolName?: string;
+  /** role==='tool' 才有：参数摘要（如 "→ 小游"） */
+  argsSummary?: string;
+  /** role==='tool' 才有：结果出错时的简短预览，OK 时空 */
+  toolError?: string;
 }
 
 export interface AppState {
@@ -166,18 +172,37 @@ export function reducer(state: AppState, action: Action): AppState {
         ),
       };
 
-    case 'tool-call':
+    case 'tool-call': {
+      // 同时把工具调用作为 'tool' role 消息追加到 chat，让用户看到 Sup 在干啥
+      const toolMsg: ChatMessage = {
+        id: action.callId,
+        role: 'tool',
+        text: '',
+        ts: new Date(),
+        toolName: action.toolName,
+        argsSummary: action.inputSummary,
+      };
       return {
         ...state,
+        chat: trimChat([...state.chat, toolMsg]),
         currentTurnToolCalls: state.currentTurnToolCalls + 1,
         currentTool: { name: action.toolName, target: action.workerName },
       };
+    }
 
     case 'tool-result-error':
+      // 把错误也回填到最近一条 tool 消息上（如果有），让用户在 chat 里看到红色标记
       return {
         ...state,
         currentTurnToolErrors: state.currentTurnToolErrors + 1,
         lastError: { message: action.preview, ts: new Date() },
+        chat: state.chat.map((m, idx) => {
+          // 倒着找最近一条 role='tool' 没标过 error 的，标上
+          if (idx === state.chat.length - 1 && m.role === 'tool' && !m.toolError) {
+            return { ...m, toolError: action.preview };
+          }
+          return m;
+        }),
       };
 
     case 'error':

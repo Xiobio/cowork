@@ -58,8 +58,16 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
 
 function findMatchingCommands(input: string): typeof SLASH_COMMANDS {
   if (!input.startsWith('/')) return [];
-  const head = input.split(/\s/)[0] ?? '';
-  return SLASH_COMMANDS.filter((c) => c.name.startsWith(head));
+  const head = (input.split(/\s/)[0] ?? '').toLowerCase();
+  // 优先级：以输入开头的 > 包含输入子串的（描述里也匹配）
+  const prefix = SLASH_COMMANDS.filter((c) => c.name.toLowerCase().startsWith(head));
+  if (prefix.length > 0) return prefix;
+  // 退化：匹配描述里包含 head（去掉 /）的
+  const term = head.slice(1);
+  if (!term) return SLASH_COMMANDS;
+  return SLASH_COMMANDS.filter(
+    (c) => c.name.toLowerCase().includes(term) || c.desc.toLowerCase().includes(term),
+  );
 }
 
 const HELP_TEXT = `## 试玩建议
@@ -797,9 +805,20 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       {/* 已完成的消息 → 进 terminal scrollback，鼠标可翻 */}
       <Static items={newMessages}>
         {(msg) => (
-          <Box key={msg.id} flexDirection="column" paddingX={1} marginBottom={1}>
+          <Box key={msg.id} flexDirection="column" paddingX={1} marginBottom={msg.role === 'tool' ? 0 : 1}>
             {msg.role === 'user' ? (
               <Text color="cyan"><Text bold>&gt;</Text> {msg.text}</Text>
+            ) : msg.role === 'tool' ? (
+              <Box>
+                <Text color={msg.toolError ? 'red' : 'gray'}>⏺ </Text>
+                <Text color={msg.toolError ? 'red' : 'cyan'}>{msg.toolName}</Text>
+                {msg.argsSummary && (
+                  <Text dimColor> {msg.argsSummary}</Text>
+                )}
+                {msg.toolError && (
+                  <Text color="red">  ✗ {msg.toolError}</Text>
+                )}
+              </Box>
             ) : (
               <Markdown text={msg.text} />
             )}
