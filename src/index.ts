@@ -32,8 +32,8 @@ import { runTui } from './tui/index.js';
 import {
   createSession,
   findLatestSession,
-  listSessions,
   loadSession,
+  summarizeAllSessions,
   touchSession,
   type SessionBundle,
   type SessionMeta,
@@ -492,7 +492,7 @@ function resolveSession(args: CliArgs, adapterName: string): ResolvedSession {
 
 function printSessionList(): void {
   const cwd = process.cwd();
-  const sessions = listSessions(cwd);
+  const sessions = summarizeAllSessions(cwd);
   if (sessions.length === 0) {
     console.log('本目录下还没有 session。第一次运行 npm run dev 会自动创建。');
     return;
@@ -501,7 +501,7 @@ function printSessionList(): void {
   for (const s of sessions) {
     const age = formatTimeAgo(new Date(s.lastUsedAt));
     console.log(`  ${s.id}`);
-    console.log(`    adapter=${s.adapter}  lastUsed=${age}  created=${s.createdAt}`);
+    console.log(`    adapter=${s.adapter}  lastUsed=${age}  ${s.chatLines} chat · ${s.workerCount} workers`);
   }
   console.log(`\nresume 指定的：  npm run dev -- --session <id>`);
   console.log(`新开一个：       npm run dev -- --new`);

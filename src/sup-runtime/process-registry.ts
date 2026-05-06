@@ -127,14 +127,19 @@ export function installSafetyNet(): void {
 
   const ppid = process.ppid;
   if (ppid && ppid > 0) {
+    // 连续 3 次（~30 秒）探测都说父死才自杀。一次性误判不够格触发，
+    // 比如系统短暂挂起 / 调度器漂移 / 不可靠的 process.kill(pid,0) 返回。
+    let consecutiveDead = 0;
     const timer = setInterval(() => {
       try {
-        // process.kill(pid, 0) = "is alive" 探测，不真发信号
-        process.kill(ppid, 0);
+        process.kill(ppid, 0); // 仅探测，不真发信号
+        consecutiveDead = 0;
       } catch {
-        // 父进程死了 —— 终端被关 / npm 异常退出 / 其它，自杀别留 zombie
-        killAllSync();
-        process.exit(0);
+        consecutiveDead++;
+        if (consecutiveDead >= 3) {
+          killAllSync();
+          process.exit(0);
+        }
       }
     }, 10_000);
     timer.unref(); // 不阻止正常退出

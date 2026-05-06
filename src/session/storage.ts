@@ -239,6 +239,49 @@ export function findLatestSession(cwd: string): SessionMeta | null {
   return all[0] ?? null;
 }
 
+/** 给 --list-sessions / /sessions 用的总览：每个 session 加上 chat 行数和 worker 数 */
+export interface SessionSummary extends SessionMeta {
+  chatLines: number;
+  workerCount: number;
+}
+
+export function summarizeSession(cwd: string, id: string): SessionSummary | null {
+  const mp = metaPath(cwd, id);
+  if (!existsSync(mp)) return null;
+  let meta: SessionMeta;
+  try {
+    meta = JSON.parse(readFileSync(mp, 'utf8')) as SessionMeta;
+  } catch {
+    return null;
+  }
+  let chatLines = 0;
+  const cp = chatPath(cwd, id);
+  if (existsSync(cp)) {
+    // 不全文 parse —— 大文件就估算（按 size / 平均行长）
+    const size = statSync(cp).size;
+    if (size < TAIL_THRESHOLD) {
+      chatLines = readFileSync(cp, 'utf8').split('\n').filter((s) => s.trim()).length;
+    } else {
+      chatLines = Math.round(size / 200); // 假设每条 ~200 字节
+    }
+  }
+  let workerCount = 0;
+  const wp = workersPath(cwd, id);
+  if (existsSync(wp)) {
+    try {
+      const workers = JSON.parse(readFileSync(wp, 'utf8')) as WorkerSnapshot[];
+      workerCount = workers.length;
+    } catch { /* ignore */ }
+  }
+  return { ...meta, chatLines, workerCount };
+}
+
+export function summarizeAllSessions(cwd: string): SessionSummary[] {
+  return listSessions(cwd)
+    .map((m) => summarizeSession(cwd, m.id))
+    .filter((s): s is SessionSummary => s !== null);
+}
+
 export function loadSession(cwd: string, id: string): SessionBundle | null {
   const mp = metaPath(cwd, id);
   if (!existsSync(mp)) return null;

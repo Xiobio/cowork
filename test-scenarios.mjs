@@ -21,6 +21,8 @@ import {
   findLatestSession,
   listSessions,
   touchSession,
+  readChatTail,
+  summarizeAllSessions,
 } from './dist/session/storage.js';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -554,6 +556,42 @@ async function scenario6_5_SessionStorage(round) {
     // 找不存在的 session 应返回 null
     const missing = loadSession(root, 'not_a_real_id');
     if (missing !== null) errors.push('不存在的 session loadSession 应返回 null');
+
+    // readChatTail：超大文件 tail 路径
+    const big = createSession(root, 'claude');
+    // 写 5000 行 chat，每行 ~300 bytes → 文件总大小 1.5MB（< 2MB 阈值，走全文路径）
+    for (let i = 0; i < 5000; i++) {
+      appendChat(root, big.id, {
+        id: `m_${i}`,
+        role: i % 2 === 0 ? 'user' : 'sup',
+        text: 'A'.repeat(280) + ` line${i}`,
+        ts: new Date().toISOString(),
+      });
+    }
+    const tail50 = readChatTail(root, big.id, 50);
+    if (tail50.length !== 50) errors.push(`tail 50 应 = 50, 实为 ${tail50.length}`);
+    if (tail50[tail50.length - 1]?.id !== 'm_4999') errors.push(`tail 末条应 = m_4999, 实为 ${tail50[tail50.length - 1]?.id}`);
+    if (tail50[0]?.id !== 'm_4950') errors.push(`tail 首条应 = m_4950, 实为 ${tail50[0]?.id}`);
+
+    // 写到 > 2MB 触发大文件路径
+    for (let i = 5000; i < 12000; i++) {
+      appendChat(root, big.id, {
+        id: `m_${i}`,
+        role: 'user',
+        text: 'B'.repeat(280) + ` line${i}`,
+        ts: new Date().toISOString(),
+      });
+    }
+    const tail20 = readChatTail(root, big.id, 20);
+    if (tail20.length !== 20) errors.push(`big tail 20 应 = 20, 实为 ${tail20.length}`);
+    if (tail20[tail20.length - 1]?.id !== 'm_11999') errors.push(`big tail 末条应 = m_11999, 实为 ${tail20[tail20.length - 1]?.id}`);
+
+    // summarizeAllSessions 应包含 chatLines / workerCount
+    const summaries = summarizeAllSessions(root);
+    if (summaries.length < 2) errors.push(`summaries 应 >= 2, 实为 ${summaries.length}`);
+    const bigSummary = summaries.find((s) => s.id === big.id);
+    if (!bigSummary) errors.push('summarizeAllSessions 找不到 big session');
+    else if (bigSummary.chatLines < 1000) errors.push(`big chatLines 应 >> 1000, 实为 ${bigSummary.chatLines}`);
   } catch (err) {
     errors.push(`exception: ${err.message}`);
   } finally {

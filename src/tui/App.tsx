@@ -20,7 +20,7 @@ import type {
   SessionMeta,
   WorkerSnapshot,
 } from '../session/storage.js';
-import { appendChat, listSessions, saveWorkers, updateMeta } from '../session/storage.js';
+import { appendChat, saveWorkers, summarizeAllSessions, updateMeta } from '../session/storage.js';
 import { Splash } from './components/Splash.js';
 import { Markdown } from './components/Markdown.js';
 import { reducer, initialState, mkMessageId, seedMessageId } from './state.js';
@@ -321,14 +321,14 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
       persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
-      const sessions = listSessions(cwd);
+      const sessions = summarizeAllSessions(cwd);
       const lines: string[] = [];
       lines.push(`本目录下 ${sessions.length} 个 session（最近的在上）：`);
       lines.push('');
       for (const s of sessions) {
         const mark = s.id === persistence.meta.id ? '> ' : '  ';
         lines.push(`${mark}\`${s.id}\``);
-        lines.push(`    adapter=${s.adapter}  lastUsed=${formatAge(new Date(s.lastUsedAt))}`);
+        lines.push(`    adapter=${s.adapter}  lastUsed=${formatAge(new Date(s.lastUsedAt))}  ${s.chatLines} chat · ${s.workerCount} workers`);
       }
       lines.push('');
       lines.push('切别的 session 要 /quit 后跑 `npm run dev -- --session <id>`');
