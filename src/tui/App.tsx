@@ -63,7 +63,8 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/respawn',  usage: '/respawn <名字>', desc: '用历史工人的 cwd+prompt 重新拉起' },
   { name: '/sessions', usage: '/sessions',       desc: '列本目录下所有 session（带 chat 数）' },
   { name: '/persona',  usage: '/persona [id]',   desc: '看/切换 Sup 人设（10 套）' },
-  { name: '/usage',    usage: '/usage',          desc: '看 token 用量和估算成本' },
+  { name: '/usage',    usage: '/usage',          desc: '看 token 用量和估算成本（同 /cost）' },
+  { name: '/cost',     usage: '/cost',           desc: '同 /usage' },
   { name: '/compact',  usage: '/compact',        desc: '让 Sup 总结对话要点保存（新 session 起点）' },
   { name: '/export',   usage: '/export',         desc: '打印当前 session chat.jsonl 路径' },
   { name: '/version',  usage: '/version',        desc: '看 cowork 和已注册 adapter 版本' },
@@ -618,7 +619,8 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       return;
     }
 
-    if (trimmed === '/usage') {
+    // /cost 是 Claude Code 同款别名
+    if (trimmed === '/usage' || trimmed === '/cost') {
       const ctxTokens = state.lastTurnContextTokens;
       const ctxPct = ctxTokens > 0 ? Math.round((ctxTokens / 200_000) * 100) : 0;
       const lines: string[] = [];
