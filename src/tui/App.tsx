@@ -367,6 +367,24 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     [cwd, sessionId],
   );
 
+  /**
+   * 本地命令的统一汇报路径：把用户输入和"假装是 Sup 输出的回复"一对一放进
+   * chat。代替原来 10 个本地命令各自重复写的 4-5 行 dispatch + persist。
+   */
+  const replyLocally = useCallback(
+    (userInput: string, output: string) => {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: userInput, messageId: uid });
+      persistUser(uid, userInput);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      dispatch({ type: 'sup-text-final', messageId: id, text: output });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, output);
+    },
+    [persistUser, persistSup],
+  );
+
   const handleSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -410,26 +428,14 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       return;
     }
     if (trimmed === '/help') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
-      dispatch({ type: 'sup-text-final', messageId: id, text: HELP_TEXT });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, HELP_TEXT);
+      replyLocally(trimmed, HELP_TEXT);
       return;
     }
     if (trimmed === '/new') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
-      const hint = '要开新 session 请 /quit 后运行：\n  npm run dev -- --new\n（当前 session 仍会被保存，再 --list-sessions 可看到）';
-      dispatch({ type: 'sup-text-final', messageId: id, text: hint });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, hint);
+      replyLocally(
+        trimmed,
+        '要开新 session 请 /quit 后运行：\n  npm run dev -- --new\n（当前 session 仍会被保存，再 --list-sessions 可看到）',
+      );
       return;
     }
     // /persona —— 不带参数打开 modal 选择器；带参数直接切
@@ -512,11 +518,6 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     }
 
     if (trimmed === '/feedback') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       const lines: string[] = [];
       lines.push('## 反馈');
       lines.push('');
@@ -531,19 +532,11 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       lines.push(`- persona: ${getPersonaOrDefault(persistence.meta.personaId).id}`);
       lines.push(`- node: ${process.version}`);
       lines.push(`- platform: ${process.platform}`);
-      const out = lines.join('\n');
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, lines.join('\n'));
       return;
     }
 
     if (trimmed === '/init') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       let out: string;
       if (projectMdExists(cwd)) {
         out = `\`cowork.md\` 已经在 ${projectMdPath(cwd)} 存在了。\n\n` +
@@ -555,18 +548,11 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
               `下次 cowork 启动会自动塞进 Sup 系统提示词。\n\n` +
               `**要让它对当前 Sup 生效**：/quit 后 \`npm run dev\` 重启。`;
       }
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, out);
       return;
     }
 
     if (trimmed === '/version') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       const lines: string[] = [];
       lines.push(`## cowork v${COWORK_VERSION}`);
       lines.push('');
@@ -574,27 +560,16 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       lines.push(`- persona: **${getPersonaOrDefault(persistence.meta.personaId).name}** (${persistence.meta.personaId ?? 'office'})`);
       lines.push(`- session: \`${persistence.meta.id}\``);
       lines.push(`- repo: https://github.com/Xiobio/cowork`);
-      const out = lines.join('\n');
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, lines.join('\n'));
       return;
     }
 
     if (trimmed === '/export') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       const chatPath = chatFilePath(cwd, persistence.meta.id);
-      const out =
-        `当前 session 的对话记录在：\n\n  \`${chatPath}\`\n\n` +
-        `每行一条 JSON，含 role / text / ts / id。可以 \`cat\` / \`type\` 直接看。\n` +
-        `工人元数据在同目录的 \`workers.json\`，meta 在 \`meta.json\`。`;
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(
+        trimmed,
+        `当前 session 的对话记录在：\n\n  \`${chatPath}\`\n\n每行一条 JSON，含 role / text / ts / id。可以 \`cat\` / \`type\` 直接看。\n工人元数据在同目录的 \`workers.json\`，meta 在 \`meta.json\`。`,
+      );
       return;
     }
 
@@ -652,11 +627,6 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     }
 
     if (trimmed === '/usage') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       const ctxTokens = state.lastTurnContextTokens;
       const ctxPct = ctxTokens > 0 ? Math.round((ctxTokens / 200_000) * 100) : 0;
       const lines: string[] = [];
@@ -673,19 +643,11 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       lines.push('- claude adapter 从 result.usage 解析；codex adapter 部分版本不报，会显示 0');
       lines.push('- ctx % 按 200k 默认上下文窗口估算（claude sonnet/opus 都是这个量级）');
       lines.push('- 工人不计入这里 —— 工人在 task 面板各自有 token 列');
-      const out = lines.join('\n');
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, lines.join('\n'));
       return;
     }
 
     if (trimmed === '/sessions') {
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       const sessions = summarizeAllSessions(cwd);
       const lines: string[] = [];
       lines.push(`本目录下 ${sessions.length} 个 session（最近的在上）：`);
@@ -697,10 +659,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       }
       lines.push('');
       lines.push('切别的 session 要 /quit 后跑 `npm run dev -- --session <id>`');
-      const out = lines.join('\n');
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, lines.join('\n'));
       return;
     }
     if (trimmed.startsWith('/respawn')) {
@@ -761,32 +720,17 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     // /peek <name> —— 直接从 WorkerManager 读近 20 条事件，不过 Sup LLM
     if (trimmed.startsWith('/peek')) {
       const name = trimmed.slice('/peek'.length).trim();
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       const out = name
         ? renderPeek(manager, name)
         : `用法：/peek <名字>。当前在跑：${manager.listWorkers().map(w => w.name).join(', ') || '(无)'}`;
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, out);
       return;
     }
 
     // /clean —— 把所有 stopped 工人从 map 里清掉（立即 sweep，不等 TTL）
     if (trimmed === '/clean') {
       const n = manager.sweepStopped(0);
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
-      const out = `已清理 ${n} 个 stopped 工人`;
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, `已清理 ${n} 个 stopped 工人`);
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
       return;
     }
