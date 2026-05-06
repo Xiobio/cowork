@@ -175,6 +175,10 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
   // 已经通过 <Static> 输出过的消息 ID，防止重复输出
   const flushedRef = useRef(new Set<string>());
 
+  // 用户至少交互过一次（user-submit 触发）后就不再显示 welcome banner，
+  // 即便后来 /clear 把 chat 清空。
+  const [hasInteracted, setHasInteracted] = useState(false);
+
   useLayoutEffect(() => {
     dispatch({ type: 'session-started', cliSessionId: session.cliSessionId ?? '', pid: session.pid });
     dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
@@ -369,6 +373,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     setInput('');
     setPanelMode('chat');
     historyCursor.current = -1;
+    if (!hasInteracted) setHasInteracted(true);
 
     // 推入历史（dedup 最近一条）
     const hist = historyRef.current;
@@ -849,7 +854,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: 0 });
       persistSup(sid, `[error] ${msg}`);
     }
-  }, [supervisor, manager, onExit, exit, persistUser, persistSup, state.dormantWorkers, state.status.kind]);
+  }, [supervisor, manager, onExit, exit, persistUser, persistSup, state.dormantWorkers, state.status.kind, hasInteracted]);
 
   // Turn 结束后 drain 一条输入队列。注意 handleSubmit 自己会再次进入 chatting
   // 状态（Sup 的 chat 路径）或者直接完成（本地命令），下一轮再触发这个 effect。
@@ -1165,8 +1170,8 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
   return (
     <Box flexDirection="column" width={cols}>
-      {/* Welcome / Resume banner —— chat 空时显示一条提示 */}
-      {state.chat.length === 0 && (
+      {/* Welcome / Resume banner —— chat 空 + 用户还没交互过时显示 */}
+      {state.chat.length === 0 && !hasInteracted && (
         <Box flexDirection="column" paddingX={1} marginY={1}>
           <Text dimColor>
             {persistence.resumed

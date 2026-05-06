@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useInput } from 'ink';
 
 interface Props {
   width: number;
@@ -38,6 +38,11 @@ export function Splash({ width, adapterName, personaName, resumed, onDone }: Pro
     const t4 = setTimeout(() => onDone(), 2400);
     return () => { clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [onDone]);
+
+  // 任意按键跳过 splash —— 频繁重启的用户不用每次等 2.4 秒
+  useInput(() => {
+    onDone();
+  });
 
   return (
     <Box flexDirection="column" width={width} alignItems="center" justifyContent="center" minHeight={20}>
