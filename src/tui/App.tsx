@@ -191,6 +191,13 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
           role: m.role,
           text: m.text,
           ts: new Date(m.ts),
+          ...(m.role === 'tool'
+            ? {
+                toolName: m.toolName,
+                argsSummary: m.argsSummary,
+                toolError: m.toolError,
+              }
+            : {}),
         })),
       });
       dispatch({ type: 'set-dormant', workers: bundle.workers });
@@ -318,6 +325,19 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
   const persistSup = useCallback((id: string, text: string) => {
     appendChat(cwd, sessionId, { id, role: 'sup', text, ts: new Date().toISOString() });
   }, [cwd, sessionId]);
+  const persistTool = useCallback(
+    (id: string, toolName: string, argsSummary: string) => {
+      appendChat(cwd, sessionId, {
+        id,
+        role: 'tool',
+        text: '',
+        toolName,
+        argsSummary,
+        ts: new Date().toISOString(),
+      });
+    },
+    [cwd, sessionId],
+  );
 
   const handleSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
@@ -658,7 +678,11 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     const observer: ChatObserver = {
       onTextDelta: (delta) => dispatch({ type: 'sup-text-delta', messageId: sid, delta }),
       onToolCall: (toolName, inputObj) => {
-        dispatch({ type: 'tool-call', callId: mkMessageId(), toolName: shortenToolName(toolName), inputSummary: summarizeInput(inputObj), workerName: extractWorkerName(inputObj) });
+        const callId = mkMessageId();
+        const shortName = shortenToolName(toolName);
+        const argsSummary = summarizeInput(inputObj);
+        dispatch({ type: 'tool-call', callId, toolName: shortName, inputSummary: argsSummary, workerName: extractWorkerName(inputObj) });
+        persistTool(callId, shortName, argsSummary);
       },
       onToolResult: (_callId, output, isError) => {
         if (isError) {
@@ -994,12 +1018,18 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     <Box flexDirection="column" width={cols}>
       {/* Welcome / Resume banner —— chat 空时显示一条提示 */}
       {state.chat.length === 0 && (
-        <Box paddingX={1} marginY={1}>
+        <Box flexDirection="column" paddingX={1} marginY={1}>
           <Text dimColor>
             {persistence.resumed
               ? `↻ session 已 resume，聊天记录被 /clear 过或刚 build 过。输入 /sessions 看历史，/help 看命令。`
               : `✦ 新 session ${persistence.meta.id.slice(0, 19)}。输入 / 看命令，或直接说点什么开始。`}
           </Text>
+          {persistence.meta.compactedSummary && (
+            <Text dimColor>
+              📎 carryover：上次 /compact 的 {persistence.meta.compactedSummary.length} 字摘要
+              已塞进 Sup 系统提示词，Sup 知道之前在做啥。
+            </Text>
+          )}
         </Box>
       )}
 

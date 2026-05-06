@@ -66,11 +66,14 @@ function resolveWorkerCwd(input: string): string {
   return pathResolve(mainCwd, trimmed);
 }
 
-/** 读当前 session 的 chat 给 Sup 作为"上次做了什么"的记忆。走 tail-read 不会全文加载 */
+/** 读当前 session 的 chat 给 Sup 作为"上次做了什么"的记忆。走 tail-read 不会全文加载。
+ *  过滤掉 tool 消息 —— 那些是 Sup 自己的工具调用，没必要给它当记忆 (它会自己重新评估)。 */
 function loadChatHistoryText(limit: number): string {
   const sid = getSessionId();
   if (!sid) return '(无 session id，读不到历史)';
-  const entries = readChatTail(getMainCwd(), sid, limit);
+  const entries = readChatTail(getMainCwd(), sid, limit * 3) // 多读些，过滤掉 tool 后再 limit
+    .filter((e) => e.role === 'user' || e.role === 'sup')
+    .slice(-limit);
   if (entries.length === 0) return '(本 session 还没有历史对话)';
   const lines: string[] = [];
   for (const entry of entries) {

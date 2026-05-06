@@ -50,9 +50,15 @@ export interface SessionMeta {
 
 export interface ChatEntry {
   id: string;
-  role: 'user' | 'sup';
+  role: 'user' | 'sup' | 'tool';
   text: string;
   ts: string; // ISO
+  /** role==='tool' 才有：工具名 */
+  toolName?: string;
+  /** role==='tool' 才有：参数摘要 */
+  argsSummary?: string;
+  /** role==='tool' 才有：错误预览（OK 时空） */
+  toolError?: string;
 }
 
 export interface WorkerSnapshot {
