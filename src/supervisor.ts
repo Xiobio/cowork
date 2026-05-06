@@ -24,9 +24,10 @@ import { buildPrompt, getPersonaOrDefault } from './persona/index.js';
 export function buildSupervisorPrompt(
   personaId: string | null | undefined,
   carryoverSummary?: string | null,
+  projectMd?: string | null,
 ): string {
   const persona = getPersonaOrDefault(personaId);
-  return buildPrompt(persona, carryoverSummary ?? undefined);
+  return buildPrompt(persona, carryoverSummary ?? undefined, projectMd ?? undefined);
 }
 
 // ─── 流式事件处理 ──────────────────────────────────

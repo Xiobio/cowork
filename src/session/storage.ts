@@ -198,6 +198,65 @@ export function chatFilePath(cwd: string, id: string): string {
   return chatPath(cwd, id);
 }
 
+/**
+ * 读 cwd 下的 cowork.md（项目级元数据，Claude Code 的 CLAUDE.md 同款）。
+ * 启动时自动塞进 Sup 的 system prompt。用户可手动写或用 /init 生成。
+ */
+export function loadProjectMd(cwd: string): string | null {
+  const p = join(cwd, 'cowork.md');
+  if (!existsSync(p)) return null;
+  try {
+    const content = readFileSync(p, 'utf8').trim();
+    return content.length > 0 ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+export function projectMdPath(cwd: string): string {
+  return join(cwd, 'cowork.md');
+}
+
+export function projectMdExists(cwd: string): boolean {
+  return existsSync(projectMdPath(cwd));
+}
+
+const COWORK_MD_TEMPLATE = `# cowork.md
+
+这个文件会被 cowork 启动时自动加载，作为 Sup 的项目级背景知识。
+写一些"每次新 session 都应该知道的事"，比如：
+
+## 项目是什么
+
+（一两句描述本项目）
+
+## 常用工人模式
+
+- **小研**：调研型任务，cwd 用 \`worker/research/\`
+- **小试**：跑测试，cwd 用 \`.\`
+- **小写**：写文档，cwd 用 \`docs/\`
+
+## 约定
+
+- 所有研究输出 markdown 到工人 cwd
+- 代码改动只能在 \`src/\` 下
+- 不要碰 \`.cowork/\` 和 \`worker/\` 目录（cowork 内部用）
+
+## 联系/产权说明
+
+（可选：作者、license、内部链接等）
+
+---
+（这是 /init 生成的模板。改成你自己的项目内容就好。删掉本文件 cowork
+将不再加载项目背景。）
+`;
+
+export function writeProjectMdTemplate(cwd: string): string {
+  const p = projectMdPath(cwd);
+  writeFileSync(p, COWORK_MD_TEMPLATE);
+  return p;
+}
+
 export function saveWorkers(cwd: string, id: string, workers: WorkerSnapshot[]): void {
   const p = workersPath(cwd, id);
   // 覆盖写 + rename 保证原子性

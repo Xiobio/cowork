@@ -20,7 +20,18 @@ import type {
   SessionMeta,
   WorkerSnapshot,
 } from '../session/storage.js';
-import { appendChat, chatFilePath, saveCompact, saveWorkers, summarizeAllSessions, updateMeta } from '../session/storage.js';
+import {
+  appendChat,
+  chatFilePath,
+  loadProjectMd,
+  projectMdExists,
+  projectMdPath,
+  saveCompact,
+  saveWorkers,
+  summarizeAllSessions,
+  updateMeta,
+  writeProjectMdTemplate,
+} from '../session/storage.js';
 import { PERSONAS, getPersona, getPersonaOrDefault } from '../persona/index.js';
 import { Splash } from './components/Splash.js';
 import { Markdown } from './components/Markdown.js';
@@ -57,6 +68,7 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/compact',  usage: '/compact',        desc: '让 Sup 总结对话要点保存（新 session 起点）' },
   { name: '/export',   usage: '/export',         desc: '打印当前 session chat.jsonl 路径' },
   { name: '/version',  usage: '/version',        desc: '看 cowork 和已注册 adapter 版本' },
+  { name: '/init',     usage: '/init',           desc: '在 cwd 生成 cowork.md 模板（项目级背景）' },
   { name: '/new',      usage: '/new',            desc: '提示如何新开 session' },
 ];
 
@@ -98,6 +110,7 @@ const HELP_TEXT = `## 试玩建议
   /compact             让 Sup 总结对话要点保存（新 session 起点）
   /export              打印当前 session 的 chat.jsonl 路径
   /version             看 cowork / adapter / persona 版本信息
+  /init                在 cwd 生成 cowork.md 项目背景模板
   /new                 提示如何开新 session
   /quit /exit          退出（停所有工人；session 自动保存，下次 resume）
 
@@ -444,6 +457,29 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         updateMeta(cwd, persistence.meta.id, { personaId: target.id });
         out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
               `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启** cowork 才会生效。`;
+      }
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
+    if (trimmed === '/init') {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      let out: string;
+      if (projectMdExists(cwd)) {
+        out = `\`cowork.md\` 已经在 ${projectMdPath(cwd)} 存在了。\n\n` +
+              `打开看 / 改它，下次启动 cowork 会自动加载。要重新生成模板请先手动删掉。`;
+      } else {
+        const path = writeProjectMdTemplate(cwd);
+        out = `已生成 \`cowork.md\` 到：\n\n  \`${path}\`\n\n` +
+              `这是项目级元数据（同 Claude Code 的 \`CLAUDE.md\`）。改成你项目实际内容，` +
+              `下次 cowork 启动会自动塞进 Sup 系统提示词。\n\n` +
+              `**要让它对当前 Sup 生效**：/quit 后 \`npm run dev\` 重启。`;
       }
       dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
@@ -1068,10 +1104,20 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
               ? `↻ session 已 resume，聊天记录被 /clear 过或刚 build 过。输入 /sessions 看历史，/help 看命令。`
               : `✦ 新 session ${persistence.meta.id.slice(0, 19)}。输入 / 看命令，或直接说点什么开始。`}
           </Text>
+          {projectMdExists(cwd) && (
+            <Text dimColor>
+              📘 cowork.md 已加载到 Sup 系统提示词（项目级背景）。
+            </Text>
+          )}
           {persistence.meta.compactedSummary && (
             <Text dimColor>
               📎 carryover：上次 /compact 的 {persistence.meta.compactedSummary.length} 字摘要
-              已塞进 Sup 系统提示词，Sup 知道之前在做啥。
+              已塞进 Sup 系统提示词。
+            </Text>
+          )}
+          {!projectMdExists(cwd) && !persistence.meta.compactedSummary && (
+            <Text dimColor italic>
+              💡 tip：跑 /init 在 cwd 写个 cowork.md，下次 Sup 就有项目背景。
             </Text>
           )}
         </Box>

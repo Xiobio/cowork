@@ -15,7 +15,7 @@ import type { CliAdapter, McpServerConfig, RunningSession, SpawnOptions } from '
 import { Supervisor, buildSupervisorPrompt } from '../supervisor.js';
 import type { WorkerManager } from '../worker-manager/manager.js';
 import type { SessionBundle, SessionMeta } from '../session/storage.js';
-import { updateMeta } from '../session/storage.js';
+import { loadProjectMd, updateMeta } from '../session/storage.js';
 import { App } from './App.js';
 
 export interface TuiOptions {
@@ -53,6 +53,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
       systemPrompt: buildSupervisorPrompt(
         opts.session.meta.personaId,
         opts.session.meta.compactedSummary,
+        loadProjectMd(process.cwd()),
       ),
       cwd: process.cwd(),
       mcpServers,

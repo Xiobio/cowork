@@ -33,6 +33,7 @@ import {
   createSession,
   findLatestCompactedSummary,
   findLatestSession,
+  loadProjectMd,
   loadSession,
   summarizeAllSessions,
   touchSession,
@@ -321,7 +322,11 @@ async function main(): Promise<void> {
   console.log('正在启动总管，第一次可能需要几秒...');
 
   const spawnOpts: SpawnOptions = {
-    systemPrompt: buildSupervisorPrompt(sessionBundle.meta.personaId, sessionBundle.meta.compactedSummary),
+    systemPrompt: buildSupervisorPrompt(
+      sessionBundle.meta.personaId,
+      sessionBundle.meta.compactedSummary,
+      loadProjectMd(process.cwd()),
+    ),
     cwd: process.cwd(),
     mcpServers,
   };

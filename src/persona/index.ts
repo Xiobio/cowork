@@ -86,11 +86,18 @@ function fillTemplate(s: string, persona: Persona): string {
     .replace(/\$\{spawnVerb\}/g, persona.spawnVerb);
 }
 
-export function buildPrompt(persona: Persona, carryoverSummary?: string): string {
+export function buildPrompt(
+  persona: Persona,
+  carryoverSummary?: string,
+  projectMd?: string,
+): string {
+  const projectBlock = projectMd && projectMd.trim()
+    ? `# 项目背景（从 cowork.md 加载，每次新 session 都应当作前提）\n\n${projectMd.trim()}\n\n---\n\n`
+    : '';
   const carryoverBlock = carryoverSummary && carryoverSummary.trim()
     ? `# 上次 session 的 /compact 总结（你应该把它当作前提，不要去重新问）\n\n${carryoverSummary.trim()}\n\n---\n\n`
     : '';
-  return `${carryoverBlock}${persona.identity}\n\n${fillTemplate(BASE_RULES, persona)}`;
+  return `${projectBlock}${carryoverBlock}${persona.identity}\n\n${fillTemplate(BASE_RULES, persona)}`;
 }
 
 // ─── 10 套人设 ──────────────────────────────────────

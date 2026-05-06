@@ -23,6 +23,9 @@ import {
   touchSession,
   readChatTail,
   summarizeAllSessions,
+  loadProjectMd,
+  projectMdExists,
+  writeProjectMdTemplate,
 } from './dist/session/storage.js';
 import { PERSONAS, getPersona, getPersonaOrDefault } from './dist/persona/index.js';
 import { buildSupervisorPrompt } from './dist/supervisor.js';
@@ -616,6 +619,17 @@ async function scenario6_5_SessionStorage(round) {
     const promptWithCarry = buildSupervisorPrompt('office', carryText);
     if (!promptWithCarry.includes(carryText)) errors.push('buildSupervisorPrompt 应把 carryover 嵌入 prompt');
     if (!promptWithCarry.includes('上次 session 的 /compact 总结')) errors.push('carryover 应有显式 header');
+
+    // 项目级 cowork.md
+    if (projectMdExists(root)) errors.push('临时 root 不应预先有 cowork.md');
+    if (loadProjectMd(root) !== null) errors.push('loadProjectMd 不存在时应返回 null');
+    const mdPath = writeProjectMdTemplate(root);
+    if (!projectMdExists(root)) errors.push(`writeProjectMdTemplate 应建文件, 实际不存在 ${mdPath}`);
+    const md = loadProjectMd(root);
+    if (!md || !md.includes('cowork.md')) errors.push('loadProjectMd 内容缺失');
+    const promptWithMd = buildSupervisorPrompt('office', null, md);
+    if (!promptWithMd.includes(md)) errors.push('buildSupervisorPrompt 应包含 projectMd');
+    if (!promptWithMd.includes('项目背景')) errors.push('projectMd 应有 header');
 
     // summarizeAllSessions 应包含 chatLines / workerCount
     const summaries = summarizeAllSessions(root);
