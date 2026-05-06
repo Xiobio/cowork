@@ -42,6 +42,8 @@ export interface SessionMeta {
   lastUsedAt: string; // ISO
   /** Sup CLI 自己的 session id，未来 phase 2 用来 --resume */
   supCliSessionId?: string | null;
+  /** 选用的人设 id（来自 src/persona/index.ts），缺省 'office' */
+  personaId?: string;
 }
 
 export interface ChatEntry {
@@ -101,7 +103,7 @@ export function newSessionId(): string {
 
 // ─── 写 ─────────────────────────────────
 
-export function createSession(cwd: string, adapter: string): SessionMeta {
+export function createSession(cwd: string, adapter: string, personaId?: string): SessionMeta {
   const id = newSessionId();
   const dir = sessionDir(cwd, id);
   mkdirSync(dir, { recursive: true });
@@ -111,6 +113,7 @@ export function createSession(cwd: string, adapter: string): SessionMeta {
     adapter,
     createdAt: now,
     lastUsedAt: now,
+    ...(personaId ? { personaId } : {}),
   };
   writeFileSync(metaPath(cwd, id), JSON.stringify(meta, null, 2));
   writeFileSync(workersPath(cwd, id), '[]');

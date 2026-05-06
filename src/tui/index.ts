@@ -12,7 +12,7 @@ import React from 'react';
 import { render, renderToString } from 'ink';
 
 import type { CliAdapter, McpServerConfig, RunningSession, SpawnOptions } from '../sup-runtime/types.js';
-import { Supervisor, SUPERVISOR_SYSTEM_PROMPT } from '../supervisor.js';
+import { Supervisor, buildSupervisorPrompt } from '../supervisor.js';
 import type { WorkerManager } from '../worker-manager/manager.js';
 import type { SessionBundle, SessionMeta } from '../session/storage.js';
 import { updateMeta } from '../session/storage.js';
@@ -50,7 +50,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
   let session: RunningSession;
   try {
     session = await spawnSupWithResume(adapter, {
-      systemPrompt: SUPERVISOR_SYSTEM_PROMPT,
+      systemPrompt: buildSupervisorPrompt(opts.session.meta.personaId),
       cwd: process.cwd(),
       mcpServers,
       resumeCliSessionId: resumeId,

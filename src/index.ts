@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 
-import { Supervisor, SUPERVISOR_SYSTEM_PROMPT, type ChatObserver } from './supervisor.js';
+import { Supervisor, buildSupervisorPrompt, type ChatObserver } from './supervisor.js';
 import { getAdapter, listAdapters } from './sup-runtime/registry.js';
 import { cleanupOrphansSync, installSafetyNet, killAllSync, killOtherCoworkMainsSync } from './sup-runtime/process-registry.js';
 import type { CliAdapter, McpServerConfig, SpawnOptions } from './sup-runtime/types.js';
@@ -58,6 +58,8 @@ interface CliArgs {
   listSessions: boolean;
   /** --clean-orphans: 杀所有其它 cowork main 进程及其子进程，然后退出 */
   cleanOrphans: boolean;
+  /** --persona <id>: 创建新 session 时强制指定人设 id */
+  personaId: string | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -74,6 +76,7 @@ function parseArgs(argv: string[]): CliArgs {
     sessionId: null,
     listSessions: false,
     cleanOrphans: false,
+    personaId: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -103,6 +106,10 @@ function parseArgs(argv: string[]): CliArgs {
       args.listSessions = true;
     } else if (a === '--clean-orphans') {
       args.cleanOrphans = true;
+    } else if (a === '--persona') {
+      args.personaId = argv[++i] ?? null;
+    } else if (a?.startsWith('--persona=')) {
+      args.personaId = a.slice('--persona='.length);
     } else if (a === '--verbose' || a === '-v') {
       args.verbose = true;
     } else if (a === '--help' || a === '-h') {
@@ -124,6 +131,7 @@ function printHelp(): void {
   npm run dev -- --session <id>        resume 指定的 session（--list-sessions 看 id）
   npm run dev -- --list-sessions       列出本目录下所有 session
   npm run dev -- --clean-orphans       Windows: 杀掉其它 cowork main 进程及其子进程后退出
+  npm run dev -- --persona=<id>        为新 session 选人设（默认 office；TUI 内 /persona 也行）
   npm run dev -- --adapter=<name>      切换 adapter
   npm run dev -- --classic             退到纯 readline 聊天（调试用）
   npm run dev -- --prompt "问题"       单次模式：发一句话拿答案就退出
@@ -312,7 +320,7 @@ async function main(): Promise<void> {
   console.log('正在启动总管，第一次可能需要几秒...');
 
   const spawnOpts: SpawnOptions = {
-    systemPrompt: SUPERVISOR_SYSTEM_PROMPT,
+    systemPrompt: buildSupervisorPrompt(sessionBundle.meta.personaId),
     cwd: process.cwd(),
     mcpServers,
   };
@@ -460,7 +468,7 @@ function resolveSession(args: CliArgs, adapterName: string): ResolvedSession {
 
   // --new 明确新开
   if (args.newSession) {
-    const meta = createSession(cwd, adapterName);
+    const meta = createSession(cwd, adapterName, args.personaId ?? undefined);
     return { bundle: null, meta, resumed: false };
   }
 
@@ -486,7 +494,7 @@ function resolveSession(args: CliArgs, adapterName: string): ResolvedSession {
   }
 
   // 没有历史 session —— 创新的
-  const meta = createSession(cwd, adapterName);
+  const meta = createSession(cwd, adapterName, args.personaId ?? undefined);
   return { bundle: null, meta, resumed: false };
 }
 

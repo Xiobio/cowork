@@ -21,6 +21,7 @@ import type {
   WorkerSnapshot,
 } from '../session/storage.js';
 import { appendChat, saveWorkers, summarizeAllSessions, updateMeta } from '../session/storage.js';
+import { PERSONAS, getPersona, getPersonaOrDefault } from '../persona/index.js';
 import { Splash } from './components/Splash.js';
 import { Markdown } from './components/Markdown.js';
 import { reducer, initialState, mkMessageId, seedMessageId } from './state.js';
@@ -50,10 +51,11 @@ const HELP_TEXT = `可以试试：
   /quit /exit          退出（会停所有工人；session 被保存，下次默认 resume）
   /help                帮助
   /clear               清聊天
-  /peek <名字>          直接看工人近 20 条事件（不过总管 LLM）
+  /peek <名字>          直接看工人近 20 条事件（不过 Sup LLM）
   /clean               清理所有 stopped 工人
   /respawn <名字>       用历史工人的 cwd+prompt 重新招一个同名工人
   /sessions            列出本目录下的所有 session
+  /persona [id]        看/切人设（10 套：office, summoner, intern, pirate, detective, …）
   /new                 提示如何新开 session`;
 
 export function App({ adapter, session, supervisor, manager, onExit, persistence }: AppProps) {
@@ -315,6 +317,50 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       persistSup(id, hint);
       return;
     }
+    // /persona —— 列 / 切换人设
+    if (trimmed === '/persona' || trimmed.startsWith('/persona ')) {
+      const arg = trimmed.slice('/persona'.length).trim();
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+
+      const currentId = persistence.meta.personaId ?? 'office';
+      let out: string;
+      if (!arg) {
+        // 列出所有人设
+        const lines: string[] = [];
+        const cur = getPersonaOrDefault(currentId);
+        lines.push(`当前人设：**${cur.name}** (\`${cur.id}\`) — ${cur.vibe}`);
+        lines.push('');
+        lines.push('全部 10 套：');
+        for (const p of PERSONAS) {
+          const mark = p.id === currentId ? '> ' : '  ';
+          lines.push(`${mark}\`${p.id.padEnd(11)}\` — **${p.name}** · ${p.vibe}`);
+        }
+        lines.push('');
+        lines.push('切换：`/persona <id>` 然后 /quit 重启（当前 Sup 的提示词在 spawn 时已锁定）');
+        out = lines.join('\n');
+      } else {
+        const target = getPersona(arg);
+        if (!target) {
+          out = `没有 \`${arg}\` 这个人设。可选：${PERSONAS.map(p => p.id).join(', ')}`;
+        } else if (target.id === currentId) {
+          out = `当前已经是 **${target.name}** (\`${target.id}\`)。`;
+        } else {
+          updateMeta(cwd, persistence.meta.id, { personaId: target.id });
+          out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
+                `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启** cowork 才会生效。\n` +
+                `下次启动时会用这个人设构造新 Sup。`;
+        }
+      }
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
     if (trimmed === '/sessions') {
       const id = mkMessageId();
       const uid = `u_${id}`;

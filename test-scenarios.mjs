@@ -24,6 +24,8 @@ import {
   readChatTail,
   summarizeAllSessions,
 } from './dist/session/storage.js';
+import { PERSONAS, getPersona, getPersonaOrDefault } from './dist/persona/index.js';
+import { buildSupervisorPrompt } from './dist/supervisor.js';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -585,6 +587,27 @@ async function scenario6_5_SessionStorage(round) {
     const tail20 = readChatTail(root, big.id, 20);
     if (tail20.length !== 20) errors.push(`big tail 20 应 = 20, 实为 ${tail20.length}`);
     if (tail20[tail20.length - 1]?.id !== 'm_11999') errors.push(`big tail 末条应 = m_11999, 实为 ${tail20[tail20.length - 1]?.id}`);
+
+    // persona 系统：10 套都能 build prompt 不崩，每套必须含自己的 selfName 和 workerNoun
+    if (PERSONAS.length !== 10) errors.push(`PERSONAS 应有 10 套, 实为 ${PERSONAS.length}`);
+    const ids = new Set(PERSONAS.map((p) => p.id));
+    if (ids.size !== PERSONAS.length) errors.push('PERSONAS id 有重复');
+    for (const p of PERSONAS) {
+      const prompt = buildSupervisorPrompt(p.id);
+      if (!prompt.includes(p.selfName)) errors.push(`persona ${p.id} prompt 不含 selfName ${p.selfName}`);
+      if (!prompt.includes(p.workerNoun)) errors.push(`persona ${p.id} prompt 不含 workerNoun ${p.workerNoun}`);
+      if (prompt.length < 500) errors.push(`persona ${p.id} prompt 过短 ${prompt.length}`);
+    }
+    // 未知 id fallback 到默认
+    const fallbackPrompt = buildSupervisorPrompt('not_a_real_persona');
+    if (!fallbackPrompt.includes(PERSONAS[0].selfName)) errors.push('未知 persona id 应 fallback 到默认 (PERSONAS[0])');
+    // null 也应 fallback
+    const nullPrompt = buildSupervisorPrompt(null);
+    if (!nullPrompt.includes(PERSONAS[0].selfName)) errors.push('null persona id 应 fallback 到默认');
+
+    // createSession with persona id 应保留
+    const ps = createSession(root, 'claude', 'pirate');
+    if (ps.personaId !== 'pirate') errors.push(`createSession personaId 没保存, 实为 ${ps.personaId}`);
 
     // summarizeAllSessions 应包含 chatLines / workerCount
     const summaries = summarizeAllSessions(root);
