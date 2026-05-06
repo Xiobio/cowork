@@ -144,8 +144,8 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     if (slashCursor >= slashMatches.length) setSlashCursor(0);
   }, [slashMatches.length, slashCursor]);
 
-  // 弹出式选择器（modal）—— 当前只 /persona 用
-  const [activeModal, setActiveModal] = useState<null | 'persona'>(null);
+  // 弹出式选择器（modal）—— /persona 和 /respawn 用同一套
+  const [activeModal, setActiveModal] = useState<null | 'persona' | 'respawn'>(null);
   const [modalCursor, setModalCursor] = useState(0);
 
   // 已经通过 <Static> 输出过的消息 ID，防止重复输出
@@ -548,19 +548,31 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     }
     if (trimmed.startsWith('/respawn')) {
       const name = trimmed.slice('/respawn'.length).trim();
+      // 无参数 → 弹 modal 选 dormant；空 dormant 提示一下
+      if (!name) {
+        const id = mkMessageId();
+        const uid = `u_${id}`;
+        dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+        persistUser(uid, trimmed);
+        if (state.dormantWorkers.length === 0) {
+          dispatch({ type: 'sup-reply-started', messageId: id });
+          const out = '当前没有 dormant 工人可以 respawn。当前在跑的工人在任务面板。';
+          dispatch({ type: 'sup-text-final', messageId: id, text: out });
+          dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+          persistSup(id, out);
+          return;
+        }
+        // 打开 modal
+        setModalCursor(0);
+        setActiveModal('respawn');
+        return;
+      }
       const id = mkMessageId();
       const uid = `u_${id}`;
       dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
       persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
       let hint: string;
-      if (!name) {
-        hint = `用法：/respawn <名字>。当前 dormant：${state.dormantWorkers.map((w) => w.name).join(', ') || '(无)'}`;
-        dispatch({ type: 'sup-text-final', messageId: id, text: hint });
-        dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-        persistSup(id, hint);
-        return;
-      }
       const dormant = state.dormantWorkers.find((w) => w.name === name);
       if (!dormant) {
         hint = `找不到历史工人 "${name}"。当前 dormant：${state.dormantWorkers.map((w) => w.name).join(', ') || '(无)'}`;
@@ -709,7 +721,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     // 全局：Ctrl+C 退出
     if (key.ctrl && ch === 'c') { void (async () => { await onExit(); exit(); })(); return; }
 
-    // Modal 模式优先吃所有键
+    // Modal 模式优先吃所有键（persona / respawn 共用导航逻辑）
     if (activeModal === 'persona') {
       if (key.escape) { setActiveModal(null); return; }
       if (key.upArrow) { setModalCursor((c) => (c - 1 + PERSONAS.length) % PERSONAS.length); return; }
@@ -735,7 +747,46 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         persistSup(id, out);
         return;
       }
-      // 其它键忽略
+      return;
+    }
+
+    if (activeModal === 'respawn') {
+      const dormants = state.dormantWorkers;
+      if (key.escape) { setActiveModal(null); return; }
+      if (dormants.length === 0) {
+        // 不应该到这里 —— 打开前已检查
+        setActiveModal(null);
+        return;
+      }
+      if (key.upArrow) { setModalCursor((c) => (c - 1 + dormants.length) % dormants.length); return; }
+      if (key.downArrow) { setModalCursor((c) => (c + 1) % dormants.length); return; }
+      if (key.return) {
+        const target = dormants[modalCursor];
+        setActiveModal(null);
+        if (!target) return;
+        const id = mkMessageId();
+        dispatch({ type: 'sup-reply-started', messageId: id });
+        // useInput callback 是 sync，把 spawn 包到 IIFE
+        void (async () => {
+          const r = await manager.spawnWorker(target.name, target.cwd, target.initialPrompt, {
+            resumeCliSessionId: target.cliSessionId ?? null,
+          });
+          let out: string;
+          if (!r.ok) {
+            out = `spawn 失败：${r.error}`;
+          } else {
+            dispatch({ type: 'remove-dormant', name: target.name });
+            const resumedNote = target.cliSessionId
+              ? `已尝试 resume 之前 CLI 会话（${target.cliSessionId.slice(0, 12)}…，仅 claude 生效）。`
+              : `按新会话启动（无历史 cliSessionId）。`;
+            out = `已重新招 **${target.name}**（cwd=\`${target.cwd}\`）。${resumedNote}`;
+          }
+          dispatch({ type: 'sup-text-final', messageId: id, text: out });
+          dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+          persistSup(id, out);
+        })();
+        return;
+      }
       return;
     }
 
@@ -876,6 +927,35 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
   // 当前正在 streaming 的消息
   const streamingMsg = state.chat.find(m => m.streaming);
+
+  // ─── Modal: respawn 选择器 ─────────────────────
+  if (activeModal === 'respawn') {
+    return (
+      <Box flexDirection="column" width={cols} paddingX={1}>
+        <Box flexDirection="column" marginTop={1} marginBottom={1}>
+          <Text bold>选 dormant 工人重新拉起（/respawn）</Text>
+          <Text dimColor>{state.dormantWorkers.length} 个上次 session 留下的工人</Text>
+        </Box>
+        {state.dormantWorkers.map((w, i) => {
+          const focused = i === modalCursor;
+          const age = formatAge(new Date(w.lastActivity));
+          return (
+            <Box key={w.name}>
+              <Text inverse={focused}>
+                {`  ${w.name.padEnd(8)} ${age.padStart(5)}  `}
+              </Text>
+              <Text inverse={focused} dimColor={!focused}>
+                {truncate(w.initialPrompt, Math.max(30, cols - 30)) + ' '}
+              </Text>
+            </Box>
+          );
+        })}
+        <Box marginTop={1}>
+          <Text dimColor>↑↓ 选 · ↵ 重新拉起（含 --resume CLI 会话）· Esc 取消</Text>
+        </Box>
+      </Box>
+    );
+  }
 
   // ─── Modal: persona 选择器 ─────────────────────
   // 替换 chat / streaming / thinking 区域，专心做选择
