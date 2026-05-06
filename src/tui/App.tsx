@@ -111,6 +111,10 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     if (slashCursor >= slashMatches.length) setSlashCursor(0);
   }, [slashMatches.length, slashCursor]);
 
+  // 弹出式选择器（modal）—— 当前只 /persona 用
+  const [activeModal, setActiveModal] = useState<null | 'persona'>(null);
+  const [modalCursor, setModalCursor] = useState(0);
+
   // 已经通过 <Static> 输出过的消息 ID，防止重复输出
   const flushedRef = useRef(new Set<string>());
 
@@ -346,43 +350,40 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       persistSup(id, hint);
       return;
     }
-    // /persona —— 列 / 切换人设
+    // /persona —— 不带参数打开 modal 选择器；带参数直接切
     if (trimmed === '/persona' || trimmed.startsWith('/persona ')) {
       const arg = trimmed.slice('/persona'.length).trim();
+      if (!arg) {
+        // 打开 modal 选择器；input 也保留 /persona 显示在用户记录里
+        const id = mkMessageId();
+        const uid = `u_${id}`;
+        dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+        persistUser(uid, trimmed);
+        // 把 cursor 定到当前 persona 上
+        const currentId = persistence.meta.personaId ?? 'office';
+        const idx = PERSONAS.findIndex((p) => p.id === currentId);
+        setModalCursor(idx >= 0 ? idx : 0);
+        setActiveModal('persona');
+        // 把光标停留状态收尾：不 dispatch sup reply（modal 自己会承接）
+        return;
+      }
+      // 带参数：和以前一样，直接切
       const id = mkMessageId();
       const uid = `u_${id}`;
       dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
       persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
-
       const currentId = persistence.meta.personaId ?? 'office';
       let out: string;
-      if (!arg) {
-        // 列出所有人设
-        const lines: string[] = [];
-        const cur = getPersonaOrDefault(currentId);
-        lines.push(`当前人设：**${cur.name}** (\`${cur.id}\`) — ${cur.vibe}`);
-        lines.push('');
-        lines.push('全部 10 套：');
-        for (const p of PERSONAS) {
-          const mark = p.id === currentId ? '> ' : '  ';
-          lines.push(`${mark}\`${p.id.padEnd(11)}\` — **${p.name}** · ${p.vibe}`);
-        }
-        lines.push('');
-        lines.push('切换：`/persona <id>` 然后 /quit 重启（当前 Sup 的提示词在 spawn 时已锁定）');
-        out = lines.join('\n');
+      const target = getPersona(arg);
+      if (!target) {
+        out = `没有 \`${arg}\` 这个人设。可选：${PERSONAS.map(p => p.id).join(', ')}`;
+      } else if (target.id === currentId) {
+        out = `当前已经是 **${target.name}** (\`${target.id}\`)。`;
       } else {
-        const target = getPersona(arg);
-        if (!target) {
-          out = `没有 \`${arg}\` 这个人设。可选：${PERSONAS.map(p => p.id).join(', ')}`;
-        } else if (target.id === currentId) {
-          out = `当前已经是 **${target.name}** (\`${target.id}\`)。`;
-        } else {
-          updateMeta(cwd, persistence.meta.id, { personaId: target.id });
-          out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
-                `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启** cowork 才会生效。\n` +
-                `下次启动时会用这个人设构造新 Sup。`;
-        }
+        updateMeta(cwd, persistence.meta.id, { personaId: target.id });
+        out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
+              `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启** cowork 才会生效。`;
       }
       dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
@@ -567,6 +568,36 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     // 全局：Ctrl+C 退出
     if (key.ctrl && ch === 'c') { void (async () => { await onExit(); exit(); })(); return; }
 
+    // Modal 模式优先吃所有键
+    if (activeModal === 'persona') {
+      if (key.escape) { setActiveModal(null); return; }
+      if (key.upArrow) { setModalCursor((c) => (c - 1 + PERSONAS.length) % PERSONAS.length); return; }
+      if (key.downArrow) { setModalCursor((c) => (c + 1) % PERSONAS.length); return; }
+      if (key.return) {
+        const target = PERSONAS[modalCursor];
+        const currentId = persistence.meta.personaId ?? 'office';
+        setActiveModal(null);
+        const id = mkMessageId();
+        dispatch({ type: 'sup-reply-started', messageId: id });
+        let out: string;
+        if (!target) {
+          out = `内部错误：cursor 越界`;
+        } else if (target.id === currentId) {
+          out = `已经是 **${target.name}** (\`${target.id}\`)，没有变化。`;
+        } else {
+          updateMeta(cwd, persistence.meta.id, { personaId: target.id });
+          out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
+                `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启**才完全生效。`;
+        }
+        dispatch({ type: 'sup-text-final', messageId: id, text: out });
+        dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+        persistSup(id, out);
+        return;
+      }
+      // 其它键忽略
+      return;
+    }
+
     // Ctrl+L 清屏（Claude Code 同键）
     if (key.ctrl && ch === 'l') {
       dispatch({ type: 'clear-chat' });
@@ -669,6 +700,39 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
   // 当前正在 streaming 的消息
   const streamingMsg = state.chat.find(m => m.streaming);
+
+  // ─── Modal: persona 选择器 ─────────────────────
+  // 替换 chat / streaming / thinking 区域，专心做选择
+  if (activeModal === 'persona') {
+    const currentId = persistence.meta.personaId ?? 'office';
+    return (
+      <Box flexDirection="column" width={cols} paddingX={1}>
+        <Box flexDirection="column" marginTop={1} marginBottom={1}>
+          <Text bold>选 Sup 人设</Text>
+          <Text dimColor>当前：{getPersonaOrDefault(currentId).name} (`{currentId}`)</Text>
+        </Box>
+        {PERSONAS.map((p, i) => {
+          const focused = i === modalCursor;
+          const isCurrent = p.id === currentId;
+          const tag = isCurrent ? ' ✓' : '  ';
+          const idCol = p.id.padEnd(11);
+          return (
+            <Box key={p.id}>
+              <Text inverse={focused}>
+                {`${tag} ${idCol}  ${p.name.padEnd(12)} `}
+              </Text>
+              <Text inverse={focused} dimColor={!focused}>
+                {p.vibe + ' '}
+              </Text>
+            </Box>
+          );
+        })}
+        <Box marginTop={1}>
+          <Text dimColor>↑↓ 选 · ↵ 应用（要 /quit 重启完全生效）· Esc 取消</Text>
+        </Box>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column" width={cols}>
