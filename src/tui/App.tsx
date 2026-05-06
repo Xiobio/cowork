@@ -111,7 +111,7 @@ const HELP_TEXT = `## 试玩建议
 ## Session
 
   /sessions            列本目录所有 session（带 chat 数）
-  /usage               看 token 累计 + 当前 context 占用
+  /usage /cost         看 token 累计 + 当前 context 占用
   /compact             让 Sup 总结对话要点保存（新 session 起点）
   /export              打印当前 session 的 chat.jsonl 路径
   /version             看 cowork / adapter / persona 版本信息

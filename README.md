@@ -156,11 +156,13 @@ TUI 里 `/help` 看建议的试玩问题，`/quit` 或 Ctrl+C 退出。
 | `/respawn [名字]` | 拉起 dormant 工人；不带名字弹交互选择器 |
 | `/sessions` | 列本目录所有 session |
 | `/persona [id]` | 切 Sup 人设（10 套）；不带 id 弹交互选择器 |
-| `/usage` | 看 token 累计 + 当前 context 占用 |
+| `/model [id]` | 切 Sup 用的 LLM 模型（重启生效） |
+| `/usage` `/cost` | 看 token 累计 + 当前 context 占用 |
 | `/compact` | Sup 自摘要保存，新 session 起点 |
 | `/export` | 打印当前 session chat.jsonl 路径 |
 | `/version` | 看 cowork / adapter / persona 版本 |
 | `/init` | 在 cwd 生成 cowork.md 模板 |
+| `/prompt` | 看 Sup 当前完整 system prompt（诊断用） |
 | `/feedback` | 反馈 bug / 建议（GitHub issues 链接） |
 | `/search <文本>` | 在 chat 历史里搜关键词 |
 
