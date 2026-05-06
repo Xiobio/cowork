@@ -38,6 +38,10 @@ export interface AppState {
   currentTurnToolCalls: number;
   /** 当前 turn 最近一次的工具调用（thinking 指示器用），null 表示空闲或刚结束 turn */
   currentTool: { name: string; target?: string } | null;
+  /** 当前 turn 出错的工具次数 */
+  currentTurnToolErrors: number;
+  /** 最近一条错误（顶部 banner 显示，下次 user-submit 清掉） */
+  lastError: { message: string; ts: Date } | null;
 }
 
 const CHAT_MAX = 100; // 永远保留最后 N 条消息在内存里
@@ -53,6 +57,8 @@ export const initialState = (adapterName: string, adapterDisplayName: string): A
   dormantWorkers: [],
   currentTurnToolCalls: 0,
   currentTool: null,
+  currentTurnToolErrors: 0,
+  lastError: null,
 });
 
 // ─── Actions ─────────────────────────────────────
@@ -67,6 +73,7 @@ export type Action =
   | { type: 'sup-text-final'; messageId: string; text: string }
   | { type: 'sup-turn-completed'; messageId: string; toolCallCount: number }
   | { type: 'tool-call'; callId: string; toolName: string; inputSummary: string; workerName?: string | undefined }
+  | { type: 'tool-result-error'; preview: string }
   | { type: 'error'; message: string }
   | { type: 'clear-chat' }
   | { type: 'restore-chat'; messages: ChatMessage[] }
@@ -109,6 +116,8 @@ export function reducer(state: AppState, action: Action): AppState {
         status: { kind: 'chatting' },
         currentTurnToolCalls: 0, // 新 turn 重置
         currentTool: null,
+        currentTurnToolErrors: 0,
+        lastError: null, // 用户开口就清错误 banner
       };
     }
 
@@ -164,10 +173,18 @@ export function reducer(state: AppState, action: Action): AppState {
         currentTool: { name: action.toolName, target: action.workerName },
       };
 
+    case 'tool-result-error':
+      return {
+        ...state,
+        currentTurnToolErrors: state.currentTurnToolErrors + 1,
+        lastError: { message: action.preview, ts: new Date() },
+      };
+
     case 'error':
       return {
         ...state,
         status: { kind: 'error', message: action.message },
+        lastError: { message: action.message, ts: new Date() },
       };
 
     case 'clear-chat':

@@ -14,10 +14,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, resolve as pathResolve, join as pathJoin } from 'node:path';
+import { isAbsolute, resolve as pathResolve } from 'node:path';
 
 import { IpcClient } from '../worker-manager/ipc-client.js';
+import { readChatTail } from '../session/storage.js';
 
 const log = (...args: unknown[]): void => {
   process.stderr.write(
@@ -66,28 +66,19 @@ function resolveWorkerCwd(input: string): string {
   return pathResolve(mainCwd, trimmed);
 }
 
-/** 读当前 session 的 chat.jsonl 给 Sup 作为"上次做了什么"的记忆 */
+/** 读当前 session 的 chat 给 Sup 作为"上次做了什么"的记忆。走 tail-read 不会全文加载 */
 function loadChatHistoryText(limit: number): string {
   const sid = getSessionId();
   if (!sid) return '(无 session id，读不到历史)';
-  const p = pathJoin(getMainCwd(), '.cowork', 'sessions', sid, 'chat.jsonl');
-  if (!existsSync(p)) return '(本 session 还没有历史对话)';
-  const raw = readFileSync(p, 'utf8');
+  const entries = readChatTail(getMainCwd(), sid, limit);
+  if (entries.length === 0) return '(本 session 还没有历史对话)';
   const lines: string[] = [];
-  for (const line of raw.split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      const entry = JSON.parse(t) as { role: string; text: string; ts: string };
-      const tag = entry.role === 'user' ? '你' : '总管';
-      const ts = entry.ts ? ` [${entry.ts}]` : '';
-      lines.push(`${tag}${ts}:\n${entry.text}`);
-    } catch {
-      /* skip bad line */
-    }
+  for (const entry of entries) {
+    const tag = entry.role === 'user' ? '你' : '总管';
+    const ts = entry.ts ? ` [${entry.ts}]` : '';
+    lines.push(`${tag}${ts}:\n${entry.text}`);
   }
-  const tail = lines.slice(-limit);
-  return tail.join('\n\n---\n\n') || '(无历史)';
+  return lines.join('\n\n---\n\n');
 }
 
 async function main(): Promise<void> {

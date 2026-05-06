@@ -25,8 +25,15 @@ import {
   writeFileSync,
   appendFileSync,
   renameSync,
+  openSync,
+  readSync,
+  closeSync,
 } from 'node:fs';
 import { join } from 'node:path';
+
+/** 大文件 tail 读取阈值。文件超过这个大小就只读最后一段，避免 readFileSync 整个文件占内存。 */
+const TAIL_THRESHOLD = 2_000_000; // 2MB
+const TAIL_CHUNK = 500_000; // 500KB
 
 export interface SessionMeta {
   id: string;
@@ -157,6 +164,50 @@ export function saveWorkers(cwd: string, id: string, workers: WorkerSnapshot[]):
 
 // ─── 读 ─────────────────────────────────
 
+/**
+ * 读 chat.jsonl 的最后 maxLines 条。
+ * 文件 < 2MB：全文 split 然后 slice(-maxLines)
+ * 文件 ≥ 2MB：从末尾 seek 500KB chunk，跳过第一条可能切半的行，parse
+ */
+export function readChatTail(cwd: string, id: string, maxLines: number): ChatEntry[] {
+  const p = chatPath(cwd, id);
+  if (!existsSync(p)) return [];
+  const size = statSync(p).size;
+  if (size < TAIL_THRESHOLD) {
+    const raw = readFileSync(p, 'utf8');
+    return parseChatLines(raw).slice(-maxLines);
+  }
+
+  // 大文件：tail 读
+  const fd = openSync(p, 'r');
+  try {
+    const chunk = Math.min(TAIL_CHUNK, size);
+    const buf = Buffer.alloc(chunk);
+    readSync(fd, buf, 0, chunk, size - chunk);
+    const text = buf.toString('utf8');
+    // 第一行可能切了半条，从第一个 \n 之后开始
+    const firstNl = text.indexOf('\n');
+    const safeText = firstNl >= 0 ? text.slice(firstNl + 1) : text;
+    return parseChatLines(safeText).slice(-maxLines);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function parseChatLines(raw: string): ChatEntry[] {
+  const out: ChatEntry[] = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      out.push(JSON.parse(t) as ChatEntry);
+    } catch {
+      /* skip bad line */
+    }
+  }
+  return out;
+}
+
 export function listSessions(cwd: string): SessionMeta[] {
   const root = sessionsRoot(cwd);
   if (!existsSync(root)) return [];
@@ -198,20 +249,7 @@ export function loadSession(cwd: string, id: string): SessionBundle | null {
     return null;
   }
 
-  const chat: ChatEntry[] = [];
-  const cp = chatPath(cwd, id);
-  if (existsSync(cp)) {
-    const raw = readFileSync(cp, 'utf8');
-    for (const line of raw.split('\n')) {
-      const t = line.trim();
-      if (!t) continue;
-      try {
-        chat.push(JSON.parse(t) as ChatEntry);
-      } catch {
-        /* skip bad line */
-      }
-    }
-  }
+  const chat: ChatEntry[] = readChatTail(cwd, id, /* maxLines */ 500);
 
   let workers: WorkerSnapshot[] = [];
   const wp = workersPath(cwd, id);

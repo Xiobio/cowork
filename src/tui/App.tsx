@@ -161,11 +161,27 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     const cwd = process.cwd();
     const sessionId = persistence.meta.id;
 
+    // saveWorkers 是 sync writeFileSync，subscribe 每条事件一次太狠
+    // (一个 turn 50+ 事件 = 50+ 次 fs 阻塞)。debounce 到每 500ms 最多一次。
+    let saveTimer: NodeJS.Timeout | null = null;
+    let pendingSnapshots: WorkerSnapshot[] | null = null;
+    const flushSave = () => {
+      if (pendingSnapshots) {
+        saveWorkers(cwd, sessionId, pendingSnapshots);
+        pendingSnapshots = null;
+      }
+      saveTimer = null;
+    };
+    const scheduleSave = (snaps: WorkerSnapshot[]) => {
+      pendingSnapshots = snaps;
+      if (!saveTimer) saveTimer = setTimeout(flushSave, 500);
+    };
+
     const unsub = manager.subscribe(() => {
       const workers = manager.listWorkers();
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(workers) });
 
-      // 持久化工人快照
+      // 持久化工人快照（debounced）
       const snapshots: WorkerSnapshot[] = workers.map((w) => ({
         name: w.name,
         cwd: w.cwd,
@@ -177,7 +193,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         eventCount: w.eventCount,
         tokenUsed: w.tokenUsed,
       }));
-      saveWorkers(cwd, sessionId, snapshots);
+      scheduleSave(snapshots);
 
       // 如果新的活工人和 dormant 里某个重名，把那个 dormant 干掉
       for (const w of workers) {
@@ -207,8 +223,15 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         prevStates.set(w.name, w.state);
       }
     });
-    return unsub;
-  }, [manager]);
+    return () => {
+      unsub();
+      // 卸载前 flush 一次，别丢最后那条 pending 快照
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        flushSave();
+      }
+    };
+  }, [manager, persistence.meta.id]);
 
   useEffect(() => {
     const onResize = () => { if (stdout) setCols(stdout.columns); };
@@ -393,7 +416,15 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       onToolCall: (toolName, inputObj) => {
         dispatch({ type: 'tool-call', callId: mkMessageId(), toolName: shortenToolName(toolName), inputSummary: summarizeInput(inputObj), workerName: extractWorkerName(inputObj) });
       },
-      onToolResult: () => {},
+      onToolResult: (_callId, output, isError) => {
+        if (isError) {
+          const preview = (() => {
+            const s = typeof output === 'string' ? output : JSON.stringify(output);
+            return s.length > 120 ? s.slice(0, 117) + '…' : s;
+          })();
+          dispatch({ type: 'tool-result-error', preview });
+        }
+      },
       onError: (message, fatal) => { dispatch({ type: 'error', message }); if (fatal) void onExit(); },
     };
 
@@ -544,11 +575,23 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
               {state.currentTool.target && (
                 <Text dimColor> → {state.currentTool.target}</Text>
               )}
-              <Text dimColor> ({state.currentTurnToolCalls})</Text>
+              <Text dimColor> ({state.currentTurnToolCalls}</Text>
+              {state.currentTurnToolErrors > 0 && (
+                <Text color="red"> · {state.currentTurnToolErrors} 错</Text>
+              )}
+              <Text dimColor>)</Text>
             </>
           ) : (
             <Text dimColor> 思考中 ({state.currentTurnToolCalls} 次工具调用)</Text>
           )}
+        </Box>
+      )}
+
+      {/* 错误 banner：上次 turn 有 tool 报错或 fatal error 就显示，下次 user-submit 自动清 */}
+      {state.lastError && !isChatting && (
+        <Box paddingX={1} marginTop={0}>
+          <Text color="red" bold>! </Text>
+          <Text color="red">{state.lastError.message.length > 100 ? state.lastError.message.slice(0, 97) + '…' : state.lastError.message}</Text>
         </Box>
       )}
 
