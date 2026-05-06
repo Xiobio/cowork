@@ -79,11 +79,17 @@ export async function runTui(opts: TuiOptions): Promise<void> {
     }
   };
 
+  const adapterInfo = {
+    name: adapter.name,
+    displayName: adapter.displayName,
+    midTurnInterrupt: adapter.capabilities.midTurnInterrupt,
+  };
+
   if (opts.snapshot) {
     try {
       const output = renderToString(
         React.createElement(App, {
-          adapter: { name: adapter.name, displayName: adapter.displayName },
+          adapter: adapterInfo,
           session,
           supervisor,
           manager,
@@ -101,7 +107,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
 
   const ink = render(
     React.createElement(App, {
-      adapter: { name: adapter.name, displayName: adapter.displayName },
+      adapter: adapterInfo,
       session,
       supervisor,
       manager,

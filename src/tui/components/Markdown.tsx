@@ -41,6 +41,8 @@ type Block =
   | { kind: 'bullet'; indent: number; text: string }
   | { kind: 'numbered'; indent: number; marker: string; text: string }
   | { kind: 'code'; lang: string; body: string }
+  | { kind: 'table'; header: string[]; rows: string[][] }
+  | { kind: 'quote'; text: string }
   | { kind: 'blank' }
   | { kind: 'p'; text: string };
 
@@ -68,6 +70,37 @@ function parseBlocks(src: string): Block[] {
 
     if (line.trim() === '') {
       out.push({ kind: 'blank' });
+      i++;
+      continue;
+    }
+
+    // 表格：当前行像 |a|b|c| 且下一行是 |---|---|---|
+    if (line.includes('|') && i + 1 < lines.length) {
+      const sep = lines[i + 1] ?? '';
+      if (/^\s*\|?[\s:|-]+\|?\s*$/.test(sep) && sep.includes('-')) {
+        const header = splitTableRow(line);
+        if (header.length > 0) {
+          const rows: string[][] = [];
+          let j = i + 2;
+          while (j < lines.length) {
+            const r = lines[j] ?? '';
+            if (!r.includes('|') || r.trim() === '') break;
+            const cells = splitTableRow(r);
+            if (cells.length === 0) break;
+            rows.push(cells);
+            j++;
+          }
+          out.push({ kind: 'table', header, rows });
+          i = j;
+          continue;
+        }
+      }
+    }
+
+    // blockquote：> 开头
+    const quote = line.match(/^>\s?(.*)$/);
+    if (quote) {
+      out.push({ kind: 'quote', text: quote[1] ?? '' });
       i++;
       continue;
     }
@@ -148,9 +181,80 @@ function BlockRow({ block }: { block: Block }) {
       );
     case 'blank':
       return <Text> </Text>;
+    case 'quote':
+      return (
+        <Box>
+          <Text color="gray">│ </Text>
+          <Text dimColor italic><Inline text={block.text} /></Text>
+        </Box>
+      );
+    case 'table':
+      return <TableBlock header={block.header} rows={block.rows} />;
     case 'p':
       return <Inline text={block.text} />;
   }
+}
+
+function splitTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\||\|$/g, '');
+  return trimmed.split('|').map((c) => c.trim());
+}
+
+function TableBlock({ header, rows }: { header: string[]; rows: string[][] }) {
+  const numCols = Math.max(header.length, ...rows.map((r) => r.length));
+  // 列宽 = 该列里最长 cell 的可见宽度，最少 3
+  const widths: number[] = [];
+  for (let c = 0; c < numCols; c++) {
+    let max = visibleWidth(header[c] ?? '');
+    for (const row of rows) max = Math.max(max, visibleWidth(row[c] ?? ''));
+    widths.push(Math.max(3, max));
+  }
+  const padCell = (s: string, w: number): string => {
+    const vw = visibleWidth(s);
+    return s + ' '.repeat(Math.max(0, w - vw));
+  };
+  const sepLine = '─'.repeat(widths.reduce((a, b) => a + b + 3, 1));
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>{sepLine}</Text>
+      <Box>
+        {header.map((h, c) => (
+          <React.Fragment key={c}>
+            {c > 0 ? <Text dimColor> │ </Text> : <Text dimColor> </Text>}
+            <Text bold>{padCell(h, widths[c] ?? 3)}</Text>
+          </React.Fragment>
+        ))}
+      </Box>
+      <Text dimColor>{sepLine}</Text>
+      {rows.map((row, r) => (
+        <Box key={r}>
+          {Array.from({ length: numCols }).map((_, c) => (
+            <React.Fragment key={c}>
+              {c > 0 ? <Text dimColor> │ </Text> : <Text dimColor> </Text>}
+              <Text>{padCell(row[c] ?? '', widths[c] ?? 3)}</Text>
+            </React.Fragment>
+          ))}
+        </Box>
+      ))}
+      <Text dimColor>{sepLine}</Text>
+    </Box>
+  );
+}
+
+/** 简单可见宽度估算：CJK 字符算 2，其它 1 */
+function visibleWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (
+      (code >= 0x2e80 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xff01 && code <= 0xff60) ||
+      (code >= 0x20000 && code <= 0x2fa1f)
+    ) w += 2;
+    else w += 1;
+  }
+  return w;
 }
 
 // ─── 行内 ──────────────────────────────────────

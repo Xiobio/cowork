@@ -28,7 +28,7 @@ import { reducer, initialState, mkMessageId, seedMessageId } from './state.js';
 import type { WorkerView } from './types.js';
 
 interface AppProps {
-  adapter: { name: string; displayName: string };
+  adapter: { name: string; displayName: string; midTurnInterrupt: boolean };
   session: RunningSession;
   supervisor: Supervisor;
   manager: WorkerManager;
@@ -549,9 +549,13 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
     try {
       const result = await supervisor.chat(trimmed, observer);
-      dispatch({ type: 'sup-text-final', messageId: sid, text: result.text });
+      // 用户 Esc 中断 → 在文本末尾加可见标记
+      const finalText = result.stopReason === 'interrupted'
+        ? (result.text || '') + '\n\n_↩ 已取消_'
+        : result.text;
+      dispatch({ type: 'sup-text-final', messageId: sid, text: finalText });
       dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: result.toolCallCount });
-      persistSup(sid, result.text);
+      persistSup(sid, finalText);
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -656,10 +660,21 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     // 没开 menu：Tab 切任务面板
     if (key.tab) { setPanelMode('tasks'); return; }
 
-    // Esc：chatting 中 → 中断 Sup 当前回复（同 Claude Code）；空闲 → 清输入
+    // Esc：
+    //  - chatting 中 + adapter 支持 mid-turn 中断 → 调 interrupt()
+    //  - chatting 中 + adapter 不支持 → 显示提示（不要真 SIGINT，否则杀整个 Sup session）
+    //  - 空闲 → 清输入
     if (key.escape) {
       if (state.status.kind === 'chatting') {
-        void supervisor.interrupt().catch(() => { /* 已结束 / 不支持 */ });
+        if (adapter.midTurnInterrupt) {
+          void supervisor.interrupt().catch(() => { /* 已结束 */ });
+        } else {
+          // 软提示：用 lastError banner 复用现有 UI
+          dispatch({
+            type: 'tool-result-error',
+            preview: `${adapter.displayName} 不支持中途取消，等当前回复结束。Ctrl+C 可强制退出整个 cowork。`,
+          });
+        }
         return;
       }
       setInput('');
@@ -827,41 +842,31 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
           {state.workers.map(w => {
             const mark = w.state === 'running' ? '*' : w.state === 'blocked' ? '!' : w.state === 'idle' ? '✓' : '.';
             const mColor = w.state === 'running' ? 'yellow' : w.state === 'blocked' ? 'red' : w.state === 'idle' ? 'green' : 'gray';
-            const action = w.currentAction ? `[${w.currentAction}]` : '';
+            const action = w.currentAction ? w.currentAction : '·';
             const age = formatAge(w.lastActivity);
-            const meta = `${w.eventCount}ev · ${formatTokens(w.tokenUsed)}`;
-            const label = truncate(taskLabels.get(w.name) ?? '', Math.max(20, cols - 50));
+            const labelMax = Math.max(20, cols - 45);
+            const label = truncate(taskLabels.get(w.name) ?? '', labelMax);
             return (
-              <Box key={w.name} flexDirection="column">
-                <Box>
-                  <Text color={mColor}> {mark} </Text>
-                  <Text bold>{w.name.padEnd(6)}</Text>
-                  <Text color="cyan"> {action.padEnd(14)}</Text>
-                  <Text dimColor>{age.padStart(6)}  </Text>
-                  <Text dimColor>{meta}</Text>
-                </Box>
-                <Box paddingLeft={4}>
-                  <Text dimColor>{label}</Text>
-                </Box>
+              <Box key={w.name}>
+                <Text color={mColor}> {mark} </Text>
+                <Text bold>{w.name.padEnd(6)}</Text>
+                <Text color="cyan">{action.padEnd(11)}</Text>
+                <Text dimColor>{age.padStart(4)}  </Text>
+                <Text dimColor>{label}</Text>
               </Box>
             );
           })}
           {state.dormantWorkers.map(w => {
             const age = formatAge(new Date(w.lastActivity));
-            const meta = `${w.eventCount}ev · ${formatTokens(w.tokenUsed)}`;
-            const label = truncate(w.initialPrompt, Math.max(20, cols - 50));
+            const labelMax = Math.max(20, cols - 45);
+            const label = truncate(w.initialPrompt, labelMax);
             return (
-              <Box key={'d_' + w.name} flexDirection="column">
-                <Box>
-                  <Text color="gray"> · </Text>
-                  <Text color="gray">{w.name.padEnd(6)}</Text>
-                  <Text color="gray"> [dormant]     </Text>
-                  <Text dimColor>{age.padStart(6)}  </Text>
-                  <Text dimColor>{meta}</Text>
-                </Box>
-                <Box paddingLeft={4}>
-                  <Text dimColor>{label}</Text>
-                </Box>
+              <Box key={'d_' + w.name}>
+                <Text color="gray"> · </Text>
+                <Text color="gray">{w.name.padEnd(6)}</Text>
+                <Text color="gray">[dormant] </Text>
+                <Text dimColor>{age.padStart(4)}  </Text>
+                <Text dimColor>{label}</Text>
               </Box>
             );
           })}
