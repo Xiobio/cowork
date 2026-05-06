@@ -69,6 +69,8 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/export',   usage: '/export',         desc: '打印当前 session chat.jsonl 路径' },
   { name: '/version',  usage: '/version',        desc: '看 cowork 和已注册 adapter 版本' },
   { name: '/init',     usage: '/init',           desc: '在 cwd 生成 cowork.md 模板（项目级背景）' },
+  { name: '/feedback', usage: '/feedback',       desc: '反馈 bug / 建议（打印 GitHub issues 链接）' },
+  { name: '/search',   usage: '/search <文本>',  desc: '在当前 session 的 chat 历史里搜关键词' },
   { name: '/new',      usage: '/new',            desc: '提示如何新开 session' },
 ];
 
@@ -111,6 +113,8 @@ const HELP_TEXT = `## 试玩建议
   /export              打印当前 session 的 chat.jsonl 路径
   /version             看 cowork / adapter / persona 版本信息
   /init                在 cwd 生成 cowork.md 项目背景模板
+  /feedback            反馈 bug / 建议（打印 issues 链接）
+  /search <关键词>      在当前 session chat 历史里搜
   /new                 提示如何开新 session
   /quit /exit          退出（停所有工人；session 自动保存，下次 resume）
 
@@ -458,6 +462,71 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
               `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启** cowork 才会生效。`;
       }
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
+    if (trimmed.startsWith('/search')) {
+      const query = trimmed.slice('/search'.length).trim();
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      let out: string;
+      if (!query) {
+        out = '用法：`/search <关键词>`。在当前 session chat 历史里大小写不敏感搜。';
+      } else {
+        const q = query.toLowerCase();
+        const hits = state.chat.filter((m) =>
+          m.role !== 'tool' && m.text.toLowerCase().includes(q),
+        );
+        if (hits.length === 0) {
+          out = `没找到 "${query}"。\n（搜索范围：当前 session chat 历史；tool 消息和早 session 不算。）`;
+        } else {
+          const lines: string[] = [];
+          lines.push(`搜到 ${hits.length} 条含 "${query}" 的消息：`);
+          lines.push('');
+          for (const m of hits.slice(-20)) {
+            const tag = m.role === 'user' ? '你' : '总管';
+            const ts = m.ts ? new Date(m.ts).toLocaleTimeString() : '';
+            const preview = m.text.replace(/\s+/g, ' ').trim();
+            const truncated = preview.length > 120 ? preview.slice(0, 117) + '…' : preview;
+            lines.push(`- **${tag}** [${ts}]: ${truncated}`);
+          }
+          if (hits.length > 20) lines.push('', `（仅显示最近 20 条，总共 ${hits.length} 条）`);
+          out = lines.join('\n');
+        }
+      }
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
+    if (trimmed === '/feedback') {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const lines: string[] = [];
+      lines.push('## 反馈');
+      lines.push('');
+      lines.push('- **报 bug / 提建议**：[github.com/Xiobio/cowork/issues](https://github.com/Xiobio/cowork/issues)');
+      lines.push('- **新建 issue**：贴出你看到的现象 + 复现步骤 + cowork 版本（/version）');
+      lines.push('- **看代码**：[github.com/Xiobio/cowork](https://github.com/Xiobio/cowork)');
+      lines.push('');
+      lines.push(`当前环境信息（贴 issue 时一起带上）：`);
+      lines.push('');
+      lines.push(`- cowork v${COWORK_VERSION}`);
+      lines.push(`- adapter: ${adapter.displayName} (${adapter.name})`);
+      lines.push(`- persona: ${getPersonaOrDefault(persistence.meta.personaId).id}`);
+      lines.push(`- node: ${process.version}`);
+      lines.push(`- platform: ${process.platform}`);
+      const out = lines.join('\n');
       dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, out);
