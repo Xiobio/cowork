@@ -17,10 +17,16 @@ import { buildPrompt, getPersonaOrDefault } from './persona/index.js';
 /**
  * 按 persona id 构造 Sup 的系统提示词。当前活着的 Sup CLI subprocess 是
  * spawn 时把 prompt 锁定的，切 persona 要 /quit 后重新 spawn 才生效。
+ *
+ * carryoverSummary：上次 session 用 /compact 生成的总结。--new 时会从最近
+ * 一个 session 的 meta 拿过来塞进新 session，让新 Sup 立即"知道之前发生过啥"。
  */
-export function buildSupervisorPrompt(personaId: string | null | undefined): string {
+export function buildSupervisorPrompt(
+  personaId: string | null | undefined,
+  carryoverSummary?: string | null,
+): string {
   const persona = getPersonaOrDefault(personaId);
-  return buildPrompt(persona);
+  return buildPrompt(persona, carryoverSummary ?? undefined);
 }
 
 // ─── 流式事件处理 ──────────────────────────────────

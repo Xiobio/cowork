@@ -609,6 +609,14 @@ async function scenario6_5_SessionStorage(round) {
     const ps = createSession(root, 'claude', 'pirate');
     if (ps.personaId !== 'pirate') errors.push(`createSession personaId 没保存, 实为 ${ps.personaId}`);
 
+    // carryoverSummary 应注入新 session 的 prompt
+    const carryText = '上次会话总结：用户在做 X，工人小A 跑到一半。';
+    const psWithCarry = createSession(root, 'claude', 'office', carryText);
+    if (psWithCarry.compactedSummary !== carryText) errors.push('createSession 应保留 carryoverSummary');
+    const promptWithCarry = buildSupervisorPrompt('office', carryText);
+    if (!promptWithCarry.includes(carryText)) errors.push('buildSupervisorPrompt 应把 carryover 嵌入 prompt');
+    if (!promptWithCarry.includes('上次 session 的 /compact 总结')) errors.push('carryover 应有显式 header');
+
     // summarizeAllSessions 应包含 chatLines / workerCount
     const summaries = summarizeAllSessions(root);
     if (summaries.length < 2) errors.push(`summaries 应 >= 2, 实为 ${summaries.length}`);

@@ -31,6 +31,7 @@ import { IpcServer, type IpcServerInfo } from './worker-manager/ipc-server.js';
 import { runTui } from './tui/index.js';
 import {
   createSession,
+  findLatestCompactedSummary,
   findLatestSession,
   loadSession,
   summarizeAllSessions,
@@ -320,7 +321,7 @@ async function main(): Promise<void> {
   console.log('正在启动总管，第一次可能需要几秒...');
 
   const spawnOpts: SpawnOptions = {
-    systemPrompt: buildSupervisorPrompt(sessionBundle.meta.personaId),
+    systemPrompt: buildSupervisorPrompt(sessionBundle.meta.personaId, sessionBundle.meta.compactedSummary),
     cwd: process.cwd(),
     mcpServers,
   };
@@ -466,9 +467,11 @@ interface ResolvedSession {
 function resolveSession(args: CliArgs, adapterName: string): ResolvedSession {
   const cwd = process.cwd();
 
-  // --new 明确新开
+  // --new 明确新开。同时自动捞最近一个 session 的 compactedSummary 作为
+  // 新 session 的 carryover，让 Sup 的初始 context 不至于完全失忆
   if (args.newSession) {
-    const meta = createSession(cwd, adapterName, args.personaId ?? undefined);
+    const carryover = findLatestCompactedSummary(cwd) ?? undefined;
+    const meta = createSession(cwd, adapterName, args.personaId ?? undefined, carryover);
     return { bundle: null, meta, resumed: false };
   }
 

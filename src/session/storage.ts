@@ -105,7 +105,12 @@ export function newSessionId(): string {
 
 // ─── 写 ─────────────────────────────────
 
-export function createSession(cwd: string, adapter: string, personaId?: string): SessionMeta {
+export function createSession(
+  cwd: string,
+  adapter: string,
+  personaId?: string,
+  carryoverSummary?: string,
+): SessionMeta {
   const id = newSessionId();
   const dir = sessionDir(cwd, id);
   mkdirSync(dir, { recursive: true });
@@ -116,11 +121,27 @@ export function createSession(cwd: string, adapter: string, personaId?: string):
     createdAt: now,
     lastUsedAt: now,
     ...(personaId ? { personaId } : {}),
+    ...(carryoverSummary ? { compactedSummary: carryoverSummary } : {}),
   };
   writeFileSync(metaPath(cwd, id), JSON.stringify(meta, null, 2));
   writeFileSync(workersPath(cwd, id), '[]');
   // chat.jsonl 延迟到第一条消息才建（避免空 session 污染 list）
   return meta;
+}
+
+/**
+ * 找最近一个含 compactedSummary 的 session（不含当前/排除某个 id）。
+ * --new 会用它作 carryover：新 session 启动时把上次 /compact 的总结塞进 Sup 系统提示词前缀。
+ */
+export function findLatestCompactedSummary(cwd: string, excludeId?: string): string | null {
+  const all = listSessions(cwd);
+  for (const meta of all) {
+    if (excludeId && meta.id === excludeId) continue;
+    if (typeof meta.compactedSummary === 'string' && meta.compactedSummary.trim().length > 0) {
+      return meta.compactedSummary;
+    }
+  }
+  return null;
 }
 
 export function touchSession(cwd: string, id: string): void {

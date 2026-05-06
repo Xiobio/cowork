@@ -50,7 +50,10 @@ export async function runTui(opts: TuiOptions): Promise<void> {
   let session: RunningSession;
   try {
     session = await spawnSupWithResume(adapter, {
-      systemPrompt: buildSupervisorPrompt(opts.session.meta.personaId),
+      systemPrompt: buildSupervisorPrompt(
+        opts.session.meta.personaId,
+        opts.session.meta.compactedSummary,
+      ),
       cwd: process.cwd(),
       mcpServers,
       resumeCliSessionId: resumeId,
