@@ -338,15 +338,22 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       persistSup(id, out);
       return;
     }
-    if (trimmed.startsWith('/respawn ')) {
-      const name = trimmed.slice('/respawn '.length).trim();
+    if (trimmed.startsWith('/respawn')) {
+      const name = trimmed.slice('/respawn'.length).trim();
       const id = mkMessageId();
       const uid = `u_${id}`;
       dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
       persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
-      const dormant = state.dormantWorkers.find((w) => w.name === name);
       let hint: string;
+      if (!name) {
+        hint = `用法：/respawn <名字>。当前 dormant：${state.dormantWorkers.map((w) => w.name).join(', ') || '(无)'}`;
+        dispatch({ type: 'sup-text-final', messageId: id, text: hint });
+        dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+        persistSup(id, hint);
+        return;
+      }
+      const dormant = state.dormantWorkers.find((w) => w.name === name);
       if (!dormant) {
         hint = `找不到历史工人 "${name}"。当前 dormant：${state.dormantWorkers.map((w) => w.name).join(', ') || '(无)'}`;
       } else {
@@ -375,14 +382,16 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     }
 
     // /peek <name> —— 直接从 WorkerManager 读近 20 条事件，不过 Sup LLM
-    if (trimmed.startsWith('/peek ')) {
-      const name = trimmed.slice('/peek '.length).trim();
+    if (trimmed.startsWith('/peek')) {
+      const name = trimmed.slice('/peek'.length).trim();
       const id = mkMessageId();
       const uid = `u_${id}`;
       dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
       persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: id });
-      const out = renderPeek(manager, name);
+      const out = name
+        ? renderPeek(manager, name)
+        : `用法：/peek <名字>。当前在跑：${manager.listWorkers().map(w => w.name).join(', ') || '(无)'}`;
       dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, out);
