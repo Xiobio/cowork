@@ -23,7 +23,6 @@ import type {
 import {
   appendChat,
   chatFilePath,
-  loadProjectMd,
   projectMdExists,
   projectMdPath,
   saveCompact,
@@ -481,11 +480,6 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
     if (trimmed.startsWith('/search')) {
       const query = trimmed.slice('/search'.length).trim();
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
       let out: string;
       if (!query) {
         out = '用法：`/search <关键词>`。在当前 session chat 历史里大小写不敏感搜。';
@@ -511,9 +505,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
           out = lines.join('\n');
         }
       }
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(trimmed, out);
       return;
     }
 
@@ -738,15 +730,10 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     // 未注册的 / 命令：不要扔给 Sup 当人话，给个友好错误
     if (trimmed.startsWith('/')) {
       const head = trimmed.split(/\s/)[0] ?? '';
-      const id = mkMessageId();
-      const uid = `u_${id}`;
-      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
-      persistUser(uid, trimmed);
-      dispatch({ type: 'sup-reply-started', messageId: id });
-      const out = `不认识 \`${head}\`。可选命令：${SLASH_COMMANDS.map(c => c.name).join(', ')}\n（输入 \`/\` 会弹出补全菜单）`;
-      dispatch({ type: 'sup-text-final', messageId: id, text: out });
-      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
-      persistSup(id, out);
+      replyLocally(
+        trimmed,
+        `不认识 \`${head}\`。可选命令：${SLASH_COMMANDS.map(c => c.name).join(', ')}\n（输入 \`/\` 会弹出补全菜单）`,
+      );
       return;
     }
 
