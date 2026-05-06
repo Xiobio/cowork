@@ -8,8 +8,8 @@
 
 import { useEffect, useLayoutEffect, useReducer, useState, useCallback, useRef } from 'react';
 import { Box, Text, Static, useApp, useInput, useStdout } from 'ink';
-import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
+import { MultilineInput } from './components/MultilineInput.js';
 
 import type { Supervisor, ChatObserver } from '../supervisor.js';
 import type { RunningSession } from '../sup-runtime/types.js';
@@ -637,7 +637,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     }
 
     // ─── chat 模式 ───
-    // Slash 命令菜单打开时，↑↓ 导航菜单、Tab 自动补全、Esc 取消。
+    // Slash 命令菜单打开时，↑↓ 导航菜单、Tab/Enter 补全到当前选中、Esc 取消。
     if (slashMenuOpen) {
       if (key.upArrow) { setSlashCursor((c) => (c - 1 + slashMatches.length) % slashMatches.length); return; }
       if (key.downArrow) { setSlashCursor((c) => (c + 1) % slashMatches.length); return; }
@@ -649,11 +649,31 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         }
         return;
       }
+      if (key.return && input.length <= 1) {
+        const head = input.split(/\s/)[0] ?? '';
+        const exactMatch = slashMatches.find((c) => c.name === head);
+        if (!exactMatch) {
+          const cmd = slashMatches[slashCursor];
+          if (cmd) {
+            const needsArg = cmd.usage.includes('<') || cmd.usage.includes('[');
+            setInput(cmd.name + (needsArg ? ' ' : ''));
+          }
+          return;
+        }
+        // 完整匹配，直接提交
+        void handleSubmit(input);
+        return;
+      }
       if (key.escape) {
         setInput('');
         return;
       }
-      // 否则放过给 TextInput
+      return;
+    }
+
+    // chat 模式无 menu：Enter 提交（MultilineInput 自己只处理粘贴中的 \r）
+    if (key.return && input.length <= 1) {
+      void handleSubmit(input);
       return;
     }
 
@@ -880,10 +900,17 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         </Box>
       )}
 
-      {/* 输入框 —— 总是显示，chatting 时提交到队列而不是立即发送 */}
+      {/* 输入框 —— 总是显示，chatting 时提交到队列而不是立即发送。
+          MultilineInput 支持粘贴含 \n 的多行文本（替代单行 TextInput）。
+          slash menu / 任务面板 / persona modal 打开时 disable，防 useInput 冲突。 */}
       <Box paddingX={1}>
         <Text color={isChatting ? 'yellow' : 'cyan'} bold>&gt; </Text>
-        <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} placeholder={isChatting ? '总管还在回复中，你可以继续打字，会排队...' : ''} />
+        <MultilineInput
+          value={input}
+          onChange={setInput}
+          placeholder={isChatting ? '总管在回复中，继续打字会排队…' : '说点什么，或 / 看命令'}
+          disabled={panelMode === 'tasks' || activeModal !== null}
+        />
       </Box>
 
       {/* Slash 命令补全 dropdown —— 在输入框**下方**，走 Claude Code 风：
