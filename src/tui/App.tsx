@@ -426,7 +426,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       setQueueLen(inputQueueRef.current.length);
       return;
     }
-    if (trimmed === '/help') {
+    if (trimmed === '/help' || trimmed === '?' || trimmed === '？') {
       replyLocally(trimmed, HELP_TEXT);
       return;
     }
