@@ -788,23 +788,30 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         </Box>
       )}
 
-      {/* Slash 命令补全 dropdown */}
+      {/* Slash 命令补全 dropdown —— 走 Claude Code 风：背景色高亮、紧凑、无 header */}
       {slashMenuOpen && (
         <Box flexDirection="column" paddingX={1}>
-          <Text dimColor>──── commands ────</Text>
           {slashMatches.map((cmd, i) => {
             const focused = i === slashCursor;
+            // 整行（usage + desc）一起套 backgroundColor，做出"高亮整条"的效果
             return (
               <Box key={cmd.name}>
-                <Text color={focused ? 'cyan' : undefined} bold={focused}>
-                  {focused ? '› ' : '  '}
-                  {cmd.usage.padEnd(20)}
+                <Text
+                  backgroundColor={focused ? 'cyan' : undefined}
+                  color={focused ? 'black' : 'cyan'}
+                >
+                  {' ' + cmd.usage.padEnd(22)}
                 </Text>
-                <Text dimColor> {cmd.desc}</Text>
+                <Text
+                  backgroundColor={focused ? 'cyan' : undefined}
+                  color={focused ? 'black' : undefined}
+                  dimColor={!focused}
+                >
+                  {cmd.desc + ' '}
+                </Text>
               </Box>
             );
           })}
-          <Text dimColor>  ↑↓ 选择 · Tab 补全 · Esc 取消</Text>
         </Box>
       )}
 
