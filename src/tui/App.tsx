@@ -959,13 +959,47 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     }
 
     if (panelMode === 'tasks') {
+      // 光标范围 = 活工人 + dormant 工人合在一起
+      const totalRows = state.workers.length + state.dormantWorkers.length;
       if (key.tab) { setPanelMode('chat'); return; }
       if (key.escape) { setPanelMode('chat'); return; }
       if (key.upArrow) { setTaskCursor(c => Math.max(0, c - 1)); return; }
-      if (key.downArrow) { setTaskCursor(c => Math.min(Math.max(0, state.workers.length - 1), c + 1)); return; }
-      // Enter → 对当前选中工人跑 /peek，回到 chat 面板
-      if (key.return && state.workers.length > 0) {
-        const target = state.workers[Math.min(taskCursor, state.workers.length - 1)];
+      if (key.downArrow) { setTaskCursor(c => Math.min(Math.max(0, totalRows - 1), c + 1)); return; }
+      // Enter → 活工人 /peek、dormant 工人 /respawn
+      if (key.return && totalRows > 0) {
+        const idx = Math.min(taskCursor, totalRows - 1);
+        const isDormant = idx >= state.workers.length;
+        if (isDormant) {
+          const target = state.dormantWorkers[idx - state.workers.length];
+          if (!target) return;
+          setPanelMode('chat');
+          const id = mkMessageId();
+          const uid = `u_${id}`;
+          dispatch({ type: 'user-submit', text: `/respawn ${target.name}`, messageId: uid });
+          persistUser(uid, `/respawn ${target.name}`);
+          dispatch({ type: 'sup-reply-started', messageId: id });
+          void (async () => {
+            const r = await manager.spawnWorker(target.name, target.cwd, target.initialPrompt, {
+              resumeCliSessionId: target.cliSessionId ?? null,
+            });
+            let out: string;
+            if (!r.ok) {
+              out = `spawn 失败：${r.error}`;
+            } else {
+              dispatch({ type: 'remove-dormant', name: target.name });
+              const note = target.cliSessionId
+                ? `已尝试 resume CLI 会话 (${target.cliSessionId.slice(0, 12)}…)。`
+                : `按新会话启动。`;
+              out = `已重新招 **${target.name}**。${note}`;
+            }
+            dispatch({ type: 'sup-text-final', messageId: id, text: out });
+            dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+            persistSup(id, out);
+          })();
+          return;
+        }
+        // 活工人 → /peek
+        const target = state.workers[idx];
         if (target) {
           setPanelMode('chat');
           const id = mkMessageId();
@@ -1297,24 +1331,26 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
               </Box>
             );
           })}
-          {state.dormantWorkers.map(w => {
+          {state.dormantWorkers.map((w, i) => {
             const age = formatAge(new Date(w.lastActivity));
             const labelMax = Math.max(20, cols - 45);
             const label = truncate(w.initialPrompt, labelMax);
+            const dormantIdx = state.workers.length + i;
+            const focused = panelMode === 'tasks' && dormantIdx === Math.min(taskCursor, state.workers.length + state.dormantWorkers.length - 1);
             return (
               <Box key={'d_' + w.name}>
-                <Text color="gray"> · </Text>
-                <Text color="gray">{w.name.padEnd(6)}</Text>
-                <Text color="gray">[dormant] </Text>
-                <Text dimColor>{age.padStart(4)}  </Text>
-                <Text dimColor>{label}</Text>
+                <Text color="gray">{focused ? '▌' : ' '}· </Text>
+                <Text inverse={focused} color={focused ? undefined : 'gray'}>{w.name.padEnd(6)}</Text>
+                <Text inverse={focused} color={focused ? undefined : 'gray'}>[dormant] </Text>
+                <Text inverse={focused} dimColor={!focused}>{age.padStart(4)}  </Text>
+                <Text inverse={focused} dimColor={!focused}>{label}</Text>
               </Box>
             );
           })}
           {state.dormantWorkers.length > 0 && (
             <Box paddingLeft={1}>
               <Text dimColor italic>
-                dormant = 上次 session 留下的历史工人。用 /respawn &lt;名字&gt; 重新拉起。
+                dormant = 上次 session 留下的工人。Tab 进面板 ↑↓ 选 + ↵ /respawn，或 /respawn &lt;名字&gt;。
               </Text>
             </Box>
           )}
