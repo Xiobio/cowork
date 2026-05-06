@@ -56,8 +56,13 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/usage',    usage: '/usage',          desc: '看 token 用量和估算成本' },
   { name: '/compact',  usage: '/compact',        desc: '让 Sup 总结对话要点保存（新 session 起点）' },
   { name: '/export',   usage: '/export',         desc: '打印当前 session chat.jsonl 路径' },
+  { name: '/version',  usage: '/version',        desc: '看 cowork 和已注册 adapter 版本' },
   { name: '/new',      usage: '/new',            desc: '提示如何新开 session' },
 ];
+
+// 写死在源码而不是 import package.json，避免 ts json import 麻烦。
+// 升版时改这里。
+const COWORK_VERSION = '0.1.0';
 
 function findMatchingCommands(input: string): typeof SLASH_COMMANDS {
   if (!input.startsWith('/')) return [];
@@ -92,6 +97,7 @@ const HELP_TEXT = `## 试玩建议
   /usage               看 token 累计 + 当前 context 占用
   /compact             让 Sup 总结对话要点保存（新 session 起点）
   /export              打印当前 session 的 chat.jsonl 路径
+  /version             看 cowork / adapter / persona 版本信息
   /new                 提示如何开新 session
   /quit /exit          退出（停所有工人；session 自动保存，下次 resume）
 
@@ -104,8 +110,9 @@ const HELP_TEXT = `## 试玩建议
 ## 快捷键
 
   ↵                    发送
-  ↑↓                   翻历史 / dropdown 选项
+  ↑↓                   翻历史 / dropdown 选项 / 任务面板移光标
   Tab                  切任务面板 / 补全 slash 命令
+  ↵ (任务面板)           对选中的工人跑 /peek
   Esc                  Sup 在跑：取消当前回复；空闲：清输入
   Ctrl+L               清屏
   Ctrl+C               退出
@@ -438,6 +445,26 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         out = `已切到 **${target.name}** (\`${target.id}\`)。\n` +
               `当前 Sup 的系统提示词在 spawn 时已锁，**要 /quit 后再重启** cowork 才会生效。`;
       }
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
+    if (trimmed === '/version') {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const lines: string[] = [];
+      lines.push(`## cowork v${COWORK_VERSION}`);
+      lines.push('');
+      lines.push(`- adapter: **${adapter.displayName}** (${adapter.name}) · midTurnInterrupt=${adapter.midTurnInterrupt}`);
+      lines.push(`- persona: **${getPersonaOrDefault(persistence.meta.personaId).name}** (${persistence.meta.personaId ?? 'office'})`);
+      lines.push(`- session: \`${persistence.meta.id}\``);
+      lines.push(`- repo: https://github.com/Xiobio/cowork`);
+      const out = lines.join('\n');
       dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, out);
@@ -825,7 +852,24 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       if (key.tab) { setPanelMode('chat'); return; }
       if (key.escape) { setPanelMode('chat'); return; }
       if (key.upArrow) { setTaskCursor(c => Math.max(0, c - 1)); return; }
-      if (key.downArrow) { setTaskCursor(c => Math.min(state.workers.length - 1, c)); return; }
+      if (key.downArrow) { setTaskCursor(c => Math.min(Math.max(0, state.workers.length - 1), c + 1)); return; }
+      // Enter → 对当前选中工人跑 /peek，回到 chat 面板
+      if (key.return && state.workers.length > 0) {
+        const target = state.workers[Math.min(taskCursor, state.workers.length - 1)];
+        if (target) {
+          setPanelMode('chat');
+          const id = mkMessageId();
+          const uid = `u_${id}`;
+          dispatch({ type: 'user-submit', text: `/peek ${target.name}`, messageId: uid });
+          persistUser(uid, `/peek ${target.name}`);
+          dispatch({ type: 'sup-reply-started', messageId: id });
+          const out = renderPeek(manager, target.name);
+          dispatch({ type: 'sup-text-final', messageId: id, text: out });
+          dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+          persistSup(id, out);
+        }
+        return;
+      }
       return;
     }
 
@@ -1115,20 +1159,21 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
             {state.dormantWorkers.length > 0 ? ` · +${state.dormantWorkers.length} dormant` : ''}
             )
           </Text>
-          {state.workers.map(w => {
+          {state.workers.map((w, i) => {
             const mark = w.state === 'running' ? '*' : w.state === 'blocked' ? '!' : w.state === 'idle' ? '✓' : '.';
             const mColor = w.state === 'running' ? 'yellow' : w.state === 'blocked' ? 'red' : w.state === 'idle' ? 'green' : 'gray';
             const action = w.currentAction ? w.currentAction : '·';
             const age = formatAge(w.lastActivity);
             const labelMax = Math.max(20, cols - 45);
             const label = truncate(taskLabels.get(w.name) ?? '', labelMax);
+            const focused = panelMode === 'tasks' && i === Math.min(taskCursor, state.workers.length - 1);
             return (
               <Box key={w.name}>
-                <Text color={mColor}> {mark} </Text>
-                <Text bold>{w.name.padEnd(6)}</Text>
-                <Text color="cyan">{action.padEnd(11)}</Text>
-                <Text dimColor>{age.padStart(4)}  </Text>
-                <Text dimColor>{label}</Text>
+                <Text color={mColor}>{focused ? '▌' : ' '}{mark} </Text>
+                <Text inverse={focused} bold>{w.name.padEnd(6)}</Text>
+                <Text inverse={focused} color={focused ? undefined : 'cyan'}>{action.padEnd(11)}</Text>
+                <Text inverse={focused} dimColor={!focused}>{age.padStart(4)}  </Text>
+                <Text inverse={focused} dimColor={!focused}>{label}</Text>
               </Box>
             );
           })}

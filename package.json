@@ -1,9 +1,9 @@
 {
   "name": "cowork",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "让你在一个地方统筹多个 Claude Code 工人的工具",
+  "description": "让你在一个地方统筹多个 Claude Code / Codex 工人",
   "scripts": {
     "build": "tsc",
     "dev": "npm run build && node dist/index.js",
@@ -16,7 +16,6 @@
     "cross-spawn": "^7.0.6",
     "ink": "^7.0.0",
     "ink-spinner": "^5.0.0",
-    "ink-text-input": "^6.0.0",
     "react": "^19.2.5",
     "zod": "^3.23.8"
   },
