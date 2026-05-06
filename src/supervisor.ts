@@ -40,6 +40,8 @@ export interface ChatResult {
   text: string;
   toolCallCount: number;
   stopReason: 'end_turn' | 'max_tokens' | 'interrupted' | 'error';
+  /** 本 turn 的 token 用量（claude 解析自 result.usage；codex 暂无） */
+  usage?: import('./sup-runtime/types.js').TurnUsage;
 }
 
 // ─── Supervisor ──────────────────────────────────
@@ -125,7 +127,12 @@ export class Supervisor {
           break;
         case 'turn_completed':
           stopReason = event.stopReason;
-          return { text: textParts.join('\n\n'), toolCallCount, stopReason };
+          return {
+            text: textParts.join('\n\n'),
+            toolCallCount,
+            stopReason,
+            ...(event.usage ? { usage: event.usage } : {}),
+          };
         case 'session_stopped':
           stopReason = 'error';
           return { text: textParts.join('\n\n'), toolCallCount, stopReason };

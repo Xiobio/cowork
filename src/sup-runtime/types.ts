@@ -47,9 +47,20 @@ export interface ThinkingEvent extends BaseEvent {
   text: string;
 }
 
+export interface TurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+  /** 本 turn 估算的成本，美元（如果 CLI 给了） */
+  costUsd?: number;
+}
+
 export interface TurnCompletedEvent extends BaseEvent {
   type: 'turn_completed';
   stopReason: 'end_turn' | 'max_tokens' | 'interrupted' | 'error';
+  /** 可选的 token 用量，由 adapter 从 result/usage 字段解析填入 */
+  usage?: TurnUsage;
 }
 
 export interface SessionErrorEvent extends BaseEvent {

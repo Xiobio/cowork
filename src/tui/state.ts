@@ -8,6 +8,7 @@
 
 import type { WorkerView } from './types.js';
 import type { WorkerSnapshot } from '../session/storage.js';
+import type { TurnUsage } from '../sup-runtime/types.js';
 
 export type Status =
   | { kind: 'starting'; message: string }
@@ -48,6 +49,10 @@ export interface AppState {
   currentTurnToolErrors: number;
   /** 最近一条错误（顶部 banner 显示，下次 user-submit 清掉） */
   lastError: { message: string; ts: Date } | null;
+  /** 当前 turn 开始时间戳，用于计算 thinking 已用时间 */
+  currentTurnStart: number | null;
+  /** 累计 usage（仅 claude adapter 有值；codex 待补） */
+  cumulativeUsage: { inputTokens: number; outputTokens: number; costUsd: number };
 }
 
 const CHAT_MAX = 100; // 永远保留最后 N 条消息在内存里
@@ -65,6 +70,8 @@ export const initialState = (adapterName: string, adapterDisplayName: string): A
   currentTool: null,
   currentTurnToolErrors: 0,
   lastError: null,
+  currentTurnStart: null,
+  cumulativeUsage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
 });
 
 // ─── Actions ─────────────────────────────────────
@@ -77,7 +84,7 @@ export type Action =
   | { type: 'sup-reply-started'; messageId: string }
   | { type: 'sup-text-delta'; messageId: string; delta: string }
   | { type: 'sup-text-final'; messageId: string; text: string }
-  | { type: 'sup-turn-completed'; messageId: string; toolCallCount: number }
+  | { type: 'sup-turn-completed'; messageId: string; toolCallCount: number; usage?: TurnUsage }
   | { type: 'tool-call'; callId: string; toolName: string; inputSummary: string; workerName?: string | undefined }
   | { type: 'tool-result-error'; preview: string }
   | { type: 'error'; message: string }
@@ -124,6 +131,7 @@ export function reducer(state: AppState, action: Action): AppState {
         currentTool: null,
         currentTurnToolErrors: 0,
         lastError: null, // 用户开口就清错误 banner
+        currentTurnStart: Date.now(),
       };
     }
 
@@ -167,6 +175,14 @@ export function reducer(state: AppState, action: Action): AppState {
         status: { kind: 'ready' },
         currentTurnToolCalls: 0,
         currentTool: null,
+        currentTurnStart: null,
+        cumulativeUsage: action.usage
+          ? {
+              inputTokens: state.cumulativeUsage.inputTokens + action.usage.inputTokens,
+              outputTokens: state.cumulativeUsage.outputTokens + action.usage.outputTokens,
+              costUsd: state.cumulativeUsage.costUsd + (action.usage.costUsd ?? 0),
+            }
+          : state.cumulativeUsage,
         chat: state.chat.map((m) =>
           m.id === action.messageId && m.streaming ? { ...m, streaming: false } : m,
         ),

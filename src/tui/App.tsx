@@ -562,7 +562,12 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         ? (result.text || '') + '\n\n_↩ 已取消_'
         : result.text;
       dispatch({ type: 'sup-text-final', messageId: sid, text: finalText });
-      dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: result.toolCallCount });
+      dispatch({
+        type: 'sup-turn-completed',
+        messageId: sid,
+        toolCallCount: result.toolCallCount,
+        ...(result.usage ? { usage: result.usage } : {}),
+      });
       persistSup(sid, finalText);
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
     } catch (err) {
@@ -802,6 +807,17 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
   return (
     <Box flexDirection="column" width={cols}>
+      {/* Welcome / Resume banner —— chat 空时显示一条提示 */}
+      {state.chat.length === 0 && (
+        <Box paddingX={1} marginY={1}>
+          <Text dimColor>
+            {persistence.resumed
+              ? `↻ session 已 resume，聊天记录被 /clear 过或刚 build 过。输入 /sessions 看历史，/help 看命令。`
+              : `✦ 新 session ${persistence.meta.id.slice(0, 19)}。输入 / 看命令，或直接说点什么开始。`}
+          </Text>
+        </Box>
+      )}
+
       {/* 已完成的消息 → 进 terminal scrollback，鼠标可翻 */}
       <Static items={newMessages}>
         {(msg) => (
@@ -836,7 +852,7 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         </Box>
       )}
 
-      {/* 思考中指示器：显示当前工具 + 目标，比 "thinking N calls" 直观 */}
+      {/* 思考中指示器：当前工具 + 目标 + 已用时（参照 Claude 的 Thinking 12s）*/}
       {isChatting && !streamingMsg && (
         <Box paddingX={1}>
           <Text color="yellow"><Spinner type="dots" /></Text>
@@ -851,10 +867,16 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
               {state.currentTurnToolErrors > 0 && (
                 <Text color="red"> · {state.currentTurnToolErrors} 错</Text>
               )}
-              <Text dimColor>)</Text>
+              <Text dimColor>{state.currentTurnStart ? `, ${formatElapsed(Date.now() - state.currentTurnStart)}` : ''})</Text>
             </>
           ) : (
-            <Text dimColor> 思考中 ({state.currentTurnToolCalls} 次工具调用)</Text>
+            <>
+              <Text dimColor> 思考中 ({state.currentTurnToolCalls} 次工具调用</Text>
+              {state.currentTurnStart && (
+                <Text dimColor>, {formatElapsed(Date.now() - state.currentTurnStart)}</Text>
+              )}
+              <Text dimColor>)</Text>
+            </>
           )}
         </Box>
       )}
@@ -962,6 +984,10 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
               ? '↵ 排队 · Esc 取消当前回复 · Tab 任务 · Ctrl+C 退出'
               : '↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令'}
           {queueLen > 0 ? `  · queued: ${queueLen}` : ''}
+          {state.cumulativeUsage.inputTokens > 0
+            ? `  · ${formatTokens(state.cumulativeUsage.inputTokens)}↑ ${formatTokens(state.cumulativeUsage.outputTokens)}↓` +
+              (state.cumulativeUsage.costUsd > 0 ? ` · $${state.cumulativeUsage.costUsd.toFixed(3)}` : '')
+            : ''}
         </Text>
       </Box>
     </Box>
@@ -1014,6 +1040,16 @@ function formatAge(d: Date): string {
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m`;
   return `${Math.floor(sec / 3600)}h`;
+}
+
+/** 给 thinking 指示器用：12s / 1m12s / 1h2m */
+function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h${m % 60}m`;
 }
 
 function formatTokens(n: number): string {

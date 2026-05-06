@@ -124,5 +124,33 @@ function parseResult(raw: RawEvent): CanonicalEvent[] {
   else if (subtype === 'success') stopReason = 'end_turn';
   else if (subtype === 'error_max_turns' || subtype === 'error_during_execution') stopReason = 'error';
   else stopReason = 'end_turn';
-  return [{ type: 'turn_completed', stopReason, ts: now() }];
+
+  // 提取 usage（claude 的 result event 里有 usage 子对象）
+  const usageRaw = raw.usage as Record<string, unknown> | undefined;
+  let usage: import('../../types.js').TurnUsage | undefined;
+  if (usageRaw && typeof usageRaw === 'object') {
+    const inputTokens = numOr(usageRaw.input_tokens, 0);
+    const outputTokens = numOr(usageRaw.output_tokens, 0);
+    const cacheReadTokens = numOr(usageRaw.cache_read_input_tokens, 0);
+    const cacheCreateTokens = numOr(usageRaw.cache_creation_input_tokens, 0);
+    if (inputTokens > 0 || outputTokens > 0) {
+      usage = {
+        inputTokens,
+        outputTokens,
+        ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
+        ...(cacheCreateTokens > 0 ? { cacheCreateTokens } : {}),
+      };
+    }
+  }
+  // claude 的 result 顶层 total_cost_usd 字段
+  const cost = numOr(raw.total_cost_usd, NaN);
+  if (usage && Number.isFinite(cost)) {
+    usage.costUsd = cost;
+  }
+
+  return [{ type: 'turn_completed', stopReason, ts: now(), ...(usage ? { usage } : {}) }];
+}
+
+function numOr(v: unknown, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
