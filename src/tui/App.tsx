@@ -20,7 +20,7 @@ import type {
   SessionMeta,
   WorkerSnapshot,
 } from '../session/storage.js';
-import { appendChat, saveWorkers, summarizeAllSessions, updateMeta } from '../session/storage.js';
+import { appendChat, chatFilePath, saveCompact, saveWorkers, summarizeAllSessions, updateMeta } from '../session/storage.js';
 import { PERSONAS, getPersona, getPersonaOrDefault } from '../persona/index.js';
 import { Splash } from './components/Splash.js';
 import { Markdown } from './components/Markdown.js';
@@ -54,6 +54,8 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/sessions', usage: '/sessions',       desc: '列本目录下所有 session（带 chat 数）' },
   { name: '/persona',  usage: '/persona [id]',   desc: '看/切换 Sup 人设（10 套）' },
   { name: '/usage',    usage: '/usage',          desc: '看 token 用量和估算成本' },
+  { name: '/compact',  usage: '/compact',        desc: '让 Sup 总结对话要点保存（新 session 起点）' },
+  { name: '/export',   usage: '/export',         desc: '打印当前 session chat.jsonl 路径' },
   { name: '/new',      usage: '/new',            desc: '提示如何新开 session' },
 ];
 
@@ -88,6 +90,8 @@ const HELP_TEXT = `## 试玩建议
 
   /sessions            列本目录所有 session（带 chat 数）
   /usage               看 token 累计 + 当前 context 占用
+  /compact             让 Sup 总结对话要点保存（新 session 起点）
+  /export              打印当前 session 的 chat.jsonl 路径
   /new                 提示如何开新 session
   /quit /exit          退出（停所有工人；session 自动保存，下次 resume）
 
@@ -417,6 +421,76 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'sup-text-final', messageId: id, text: out });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, out);
+      return;
+    }
+
+    if (trimmed === '/export') {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const chatPath = chatFilePath(cwd, persistence.meta.id);
+      const out =
+        `当前 session 的对话记录在：\n\n  \`${chatPath}\`\n\n` +
+        `每行一条 JSON，含 role / text / ts / id。可以 \`cat\` / \`type\` 直接看。\n` +
+        `工人元数据在同目录的 \`workers.json\`，meta 在 \`meta.json\`。`;
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
+    if (trimmed === '/compact') {
+      // 走正常 chat 路径让 Sup 总结。完成后保存到 compact.md + meta。
+      const compactPrompt = `[/compact] 请用要点形式总结此 session 至今的对话和工人状态，让一个全新的 Sup 看到这份摘要后能立即接上工作。覆盖：
+
+1. 用户的目标和当前在做什么
+2. 现有工人列表（名字 / cwd / 状态 / 任务）
+3. 关键决策和已得结论
+4. 未解决 / 待办的事项
+
+长度控制在 600 字以内，markdown 列表形式。`;
+      const uid = `u_${mkMessageId()}`;
+      const sid = `s_${mkMessageId()}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: sid });
+
+      const observer: ChatObserver = {
+        onTextDelta: (delta) => dispatch({ type: 'sup-text-delta', messageId: sid, delta }),
+        onToolCall: (toolName, inputObj) => {
+          dispatch({
+            type: 'tool-call',
+            callId: mkMessageId(),
+            toolName: shortenToolName(toolName),
+            inputSummary: summarizeInput(inputObj),
+            workerName: extractWorkerName(inputObj),
+          });
+        },
+        onToolResult: () => {},
+        onError: (message) => { dispatch({ type: 'error', message }); },
+      };
+
+      try {
+        const result = await supervisor.chat(compactPrompt, observer);
+        const path = saveCompact(cwd, persistence.meta.id, result.text);
+        updateMeta(cwd, persistence.meta.id, { compactedSummary: result.text });
+        const finalText = result.text + `\n\n_↑ 上面是 compact 总结，已保存到 \`${path}\` 和 session meta。下次 \`--new\` 起新 session 时会自动塞进 Sup 的初始 context。_`;
+        dispatch({ type: 'sup-text-final', messageId: sid, text: finalText });
+        dispatch({
+          type: 'sup-turn-completed',
+          messageId: sid,
+          toolCallCount: result.toolCallCount,
+          ...(result.usage ? { usage: result.usage } : {}),
+        });
+        persistSup(sid, finalText);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        dispatch({ type: 'sup-text-final', messageId: sid, text: `[error] /compact 失败：${msg}` });
+        dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: 0 });
+        persistSup(sid, `[error] ${msg}`);
+      }
       return;
     }
 
@@ -1007,23 +1081,40 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
       {/* 底部提示 */}
       <Text dimColor>{line}</Text>
-      <Box paddingX={1}>
-        <Text dimColor>
-          {slashMenuOpen
-            ? '↑↓ 选 · Tab 补全 · Esc 取消'
-            : isChatting
-              ? '↵ 排队 · Esc 取消当前回复 · Tab 任务 · Ctrl+C 退出'
-              : '↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令'}
-          {queueLen > 0 ? `  · queued: ${queueLen}` : ''}
-          {state.lastTurnContextTokens > 0
-            ? `  · ctx ${formatTokens(state.lastTurnContextTokens)}/200k (${Math.round((state.lastTurnContextTokens / 200_000) * 100)}%)`
-            : ''}
-          {state.cumulativeUsage.outputTokens > 0
-            ? `  · ${formatTokens(state.cumulativeUsage.outputTokens)}↓` +
-              (state.cumulativeUsage.costUsd > 0 ? ` · $${state.cumulativeUsage.costUsd.toFixed(3)}` : '')
-            : ''}
-        </Text>
-      </Box>
+      {(() => {
+        const ctxPct = state.lastTurnContextTokens > 0
+          ? Math.round((state.lastTurnContextTokens / 200_000) * 100)
+          : 0;
+        const ctxColor: 'red' | 'yellow' | undefined =
+          ctxPct >= 80 ? 'red' : ctxPct >= 60 ? 'yellow' : undefined;
+        return (
+          <Box paddingX={1}>
+            <Text dimColor>
+              {slashMenuOpen
+                ? '↑↓ 选 · Tab 补全 · Esc 取消'
+                : isChatting
+                  ? '↵ 排队 · Esc 取消当前回复 · Tab 任务 · Ctrl+C 退出'
+                  : '↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令'}
+              {queueLen > 0 ? `  · queued: ${queueLen}` : ''}
+            </Text>
+            {ctxPct > 0 && (
+              <>
+                <Text dimColor>  · ctx </Text>
+                <Text color={ctxColor} dimColor={!ctxColor}>
+                  {formatTokens(state.lastTurnContextTokens)}/200k ({ctxPct}%)
+                </Text>
+                {ctxPct >= 80 && <Text color="red"> ⚠</Text>}
+              </>
+            )}
+            {state.cumulativeUsage.outputTokens > 0 && (
+              <Text dimColor>
+                {`  · ${formatTokens(state.cumulativeUsage.outputTokens)}↓`}
+                {state.cumulativeUsage.costUsd > 0 ? ` · $${state.cumulativeUsage.costUsd.toFixed(3)}` : ''}
+              </Text>
+            )}
+          </Box>
+        );
+      })()}
     </Box>
   );
 }

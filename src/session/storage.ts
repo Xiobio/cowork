@@ -44,6 +44,8 @@ export interface SessionMeta {
   supCliSessionId?: string | null;
   /** 选用的人设 id（来自 src/persona/index.ts），缺省 'office' */
   personaId?: string;
+  /** /compact 生成的对话要点摘要，新 Sup 重启时可作为前置 context */
+  compactedSummary?: string;
 }
 
 export interface ChatEntry {
@@ -151,6 +153,22 @@ export function appendChat(cwd: string, id: string, entry: ChatEntry): void {
   } catch {
     /* ignore */
   }
+}
+
+/** /compact 把 Sup 的总结存到 session 目录下的 compact.md */
+export function saveCompact(cwd: string, id: string, markdown: string): string {
+  const p = join(sessionDir(cwd, id), 'compact.md');
+  try {
+    writeFileSync(p, markdown);
+  } catch {
+    /* ignore */
+  }
+  return p;
+}
+
+/** 给 /export 用：返回 chat.jsonl 的绝对路径，文件可能尚未存在 */
+export function chatFilePath(cwd: string, id: string): string {
+  return chatPath(cwd, id);
 }
 
 export function saveWorkers(cwd: string, id: string, workers: WorkerSnapshot[]): void {
