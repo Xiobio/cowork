@@ -21,24 +21,51 @@
 
 ## 当前状态
 
-**v3 可用** —— 工人是真 CLI subprocess，不是 mock：
+**v0.1.0 可用**，对齐 Claude Code 体验：
 
-- ✅ 总管跑在 Codex 或 Claude Code subprocess 里
-- ✅ **工人也是真 CLI subprocess**。`spawn_worker` 会真的 fork
-  `codex app-server` 或 `claude -p`，分配真 pid / cliSessionId，吃真订阅配额
-- ✅ WorkerManager + IpcServer 架构：主进程持有真工人，MCP server
-  子进程通过本地 TCP + UUID token 打回主进程
-- ✅ 12 个工具（list / spawn / send / kill / peek / read 等）都走真状态
-- ✅ **TUI**：Ink `<Static>` scrollback + 底部 tasks 面板 + 输入框，
-  实时反映真工人的状态和完成通知
-- ✅ Classic 模式（`--classic`）：纯 readline 聊天
-- ✅ 单次模式（`--prompt`）：脚本化测试
-- ✅ 两个 CLI adapter（Codex / Claude Code）都跑通了真工人
-- ✅ 15 场景测试（并发 spawn / 中途 kill / 跨 adapter / 错误路径 /
-  10 工人 IPC 压测 / 真 LLM round-trip），见 [test-scenarios.mjs](test-scenarios.mjs)
+**架构**
+- ✅ 总管跑在 Codex / Claude Code 子进程里，工人也是真 CLI 子进程
+- ✅ WorkerManager + IpcServer：主进程持工人，MCP server 子进程通过
+  localhost TCP + UUID token 打回
+- ✅ 14 个 MCP 工具（list / spawn / send / kill / peek / read /
+  get_cwd / get_session_history 等）
 
-尚未：多会话持久化、主动汇报（Sup 主动顶事件而不是等你问）、
-工人挂了自动恢复。
+**Session**
+- ✅ 自动 resume 最近一次 session（默认行为）
+- ✅ `/compact` 让 Sup 自摘要，新 session 自动注入摘要前缀
+- ✅ `cowork.md` 项目级背景（同 Claude Code 的 CLAUDE.md）
+- ✅ 对话和工具调用全部持久化到 `.cowork/sessions/<id>/chat.jsonl`
+
+**TUI**
+- ✅ Splash + 标题动画 + adapter/persona/resume 状态指示
+- ✅ Slash 命令补全菜单（输入 `/` 弹出，↑↓ 选 / Tab 补全 / Enter 提交）
+- ✅ Markdown 渲染：bold / italic / code / 标题 / bullet / 数字列表 /
+  fenced code / table / blockquote / 链接
+- ✅ 多行输入：粘贴含 \\n 文本保留换行
+- ✅ Token 用量 + context 占用条（>60% 黄、>80% 红+⚠）
+- ✅ 思考指示器：当前工具名 / 目标工人 / 已用时
+- ✅ 工具调用行内显示 `⏺ tool args`，错误红色 `✗`
+- ✅ 任务面板：实时状态、当前动作、age、token；↑↓ 选 + Enter peek
+- ✅ Esc 取消（adapter 支持时）/ Ctrl+L 清屏 / Ctrl+C 退出
+- ✅ 输入历史 ↑↓ 翻 200 条
+- ✅ 输入队列：Sup 回复中继续打字会排队
+
+**人设**
+- ✅ 10 套可切换 persona（office / summoner / intern / pirate /
+  detective / starfleet / strategist / cyberpunk / zen / lab）
+- ✅ `/persona` 弹交互式选择器
+- ✅ `--persona=<id>` 创建新 session 时指定
+
+**测试**
+- ✅ 16 场景（并发 spawn / 中途 kill / 跨 adapter / 错误路径 /
+  10 工人 IPC 压测 / 真 LLM round-trip / session 存储 / persona /
+  cowork.md / tail-read / readEvent index 等）
+- ✅ 详见 [test-scenarios.mjs](test-scenarios.mjs)
+
+**进程管理**
+- ✅ Windows taskkill /T /F 杀进程树（避免 cmd.exe wrapper 漏 codex.exe）
+- ✅ Parent watchdog 父死自杀（终端关闭不留孤儿）
+- ✅ `--clean-orphans` 清理上次异常退出残留
 
 ## 运行
 
@@ -80,32 +107,90 @@ TUI 里 `/help` 看建议的试玩问题，`/quit` 或 Ctrl+C 退出。
 ### TUI 布局
 
 ```
-    ◇
-    c o w o r k           ← 开场 splash（~2 秒）
-    coordinate your AI workers
-    from a single conversation
+        ◇   ◇   ◇   ◇   ◇
 
-> 现在大家都怎么样？       ← 已发送的对话进 terminal scrollback，
-                            鼠标/PageUp 可翻
-ℹ 通报
-  小A 已完成重构，正在 run test
-⚠ 需要你决定
-  小C 在 d:/proj/a 跑到一半，遇到 auth 失败
+        ▄▄▄    ▄▄▄    ▄    ▄    ▄▄▄    ▄▄▄▄    ▄   ▄
+       █      █   █   █▌  ▐█   █   █   █   █   █  █
+       █      █   █   █▐██▌█   █   █   █▄▄█    █▄█
+       █      █   █   █ ██ █   █   █   █  █    █▄ █
+        ▀▀▀    ▀▀▀    ▀    ▀    ▀▀▀    ▀  ▀    ▀  ▀
+
+        coordinate your AI workers, batch their reports.
+        ─────────────────────────────────
+        adapter: Anthropic Claude Code · persona: 现代办公室
+        ↻ resuming previous session...
+                              （以上是 splash，~2 秒后消失）
+
+> 让小A 再跑一遍测试                    ← 你
+⏺ send_to_worker → 小A                  ← Sup 调工具行内显示
+总管已转达，小A 重新开始测试。            ← Sup 回复
 
 ─────────────────────────────────
  tasks (3)
-  * 小A  重构 user auth 模块 [AI]
-  ! 小B  跑性能压测 [你]
-  ✓ 小C  补文档
+  ▌* 小A     [Bash]      3s   42ev · 2.1kt   重构 user auth…
+   ! 小B     [WebSearch] 12s  91ev · 4.9kt   跑性能压测
+   ✓ 小C     ·           1m   28ev · 1.2kt   补文档
 ─────────────────────────────────
- >  _                     ← 输入区
+ > _                                                         ← 输入框
 ─────────────────────────────────
- tab:tasks  /quit  /help  /clear
+ ↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令
+                                       · ctx 8.2k/200k (4%) · 234↓ · $0.012
 ```
 
-上方是和总管的对话（用 Ink `<Static>` 输出到 scrollback，保留历史）。
-下方固定区：tasks 面板始终显示、输入框、底部 hint。没有边框、没有
-侧栏 —— 照搬 Claude Code 的简洁风格。
+- 上方 chat 用 Ink `<Static>` 输出到 scrollback，鼠标/PageUp 可翻
+- 工具调用行内 `⏺ tool args` 显示，错误红色 `✗`
+- 任务面板实时刷新，cursor 高亮（▌），Enter 对选中工人 /peek
+- 底部 status 显示快捷键提示 + ctx 占用 + 累计 token / cost
+
+### Slash 命令
+
+输入 `/` 自动弹补全菜单。可用命令：
+
+| 命令 | 用途 |
+|---|---|
+| `/help` | 看帮助 + 试玩建议 + 快捷键 |
+| `/quit` `/exit` | 退出（停所有工人；session 自动保存） |
+| `/clear` | 清屏（不影响 session 历史） |
+| `/peek <名字>` | 直接看工人近 20 条事件，不过 Sup |
+| `/clean` | 清掉所有 stopped 工人 |
+| `/respawn [名字]` | 拉起 dormant 工人；不带名字弹交互选择器 |
+| `/sessions` | 列本目录所有 session |
+| `/persona [id]` | 切 Sup 人设（10 套）；不带 id 弹交互选择器 |
+| `/usage` | 看 token 累计 + 当前 context 占用 |
+| `/compact` | Sup 自摘要保存，新 session 起点 |
+| `/export` | 打印当前 session chat.jsonl 路径 |
+| `/version` | 看 cowork / adapter / persona 版本 |
+| `/init` | 在 cwd 生成 cowork.md 模板 |
+| `/feedback` | 反馈 bug / 建议（GitHub issues 链接） |
+| `/search <文本>` | 在 chat 历史里搜关键词 |
+
+### 项目级背景：cowork.md
+
+类似 Claude Code 的 `CLAUDE.md`。在你的项目根目录放一个 `cowork.md`，
+cowork 启动时会自动加载到 Sup 的系统提示词。
+
+```bash
+# 在 TUI 里生成模板
+> /init
+
+# 然后编辑 cowork.md，写项目背景、常用工人模式、约定...
+# 下次 npm run dev 启动 Sup 就有了项目上下文
+```
+
+### CLI flags
+
+```bash
+npm run dev                          # 默认 resume 最近 session
+npm run dev -- --new                 # 强制新开（自动注入上次的 /compact 摘要）
+npm run dev -- --session <id>        # resume 指定 session
+npm run dev -- --list-sessions       # 列本目录所有 session
+npm run dev -- --persona=intern      # 新 session 用指定 persona
+npm run dev -- --adapter=codex       # 切到 codex
+npm run dev -- --clean-orphans       # 清残留 cowork 进程后退出
+npm run dev -- --classic             # 纯 readline 模式
+npm run dev -- --prompt "..."        # 单次模式
+npm run dev -- --probe               # 探测可用 adapter
+```
 
 ### Classic 模式（纯 readline）
 
