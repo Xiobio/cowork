@@ -62,21 +62,40 @@ function findMatchingCommands(input: string): typeof SLASH_COMMANDS {
   return SLASH_COMMANDS.filter((c) => c.name.startsWith(head));
 }
 
-const HELP_TEXT = `可以试试：
-  招一个工人叫小A，D:/proj/test，只说hello然后停
+const HELP_TEXT = `## 试玩建议
+
+  招一个工人叫小A，cwd 用 .，让他输出 hello 然后停
   现在大家都怎么样
   让小A 再说一次
   把小A 停了
-命令：
-  /quit /exit          退出（会停所有工人；session 被保存，下次默认 resume）
-  /help                帮助
-  /clear               清聊天
-  /peek <名字>          直接看工人近 20 条事件（不过 Sup LLM）
-  /clean               清理所有 stopped 工人
-  /respawn <名字>       用历史工人的 cwd+prompt 重新招一个同名工人
-  /sessions            列出本目录下的所有 session
-  /persona [id]        看/切人设（10 套：office, summoner, intern, pirate, detective, …）
-  /new                 提示如何新开 session`;
+
+## 工人
+
+  /peek <名字>          直接看工人近 20 条事件（不过 Sup）
+  /clean               清掉所有 stopped 工人
+  /respawn <名字>       用历史 cwd+prompt 重新招同名工人
+
+## Session
+
+  /sessions            列本目录所有 session（带 chat 数）
+  /new                 提示如何开新 session
+  /quit /exit          退出（停所有工人；session 自动保存，下次 resume）
+
+## 界面
+
+  /help                看本帮助
+  /clear               清屏（不影响 session 历史）
+  /persona [id]        切 Sup 人设（10 套，不带参数弹选择器）
+
+## 快捷键
+
+  ↵                    发送
+  ↑↓                   翻历史 / dropdown 选项
+  Tab                  切任务面板 / 补全 slash 命令
+  Esc                  Sup 在跑：取消当前回复；空闲：清输入
+  Ctrl+L               清屏
+  Ctrl+C               退出
+  /                    打 slash 命令补全菜单`;
 
 export function App({ adapter, session, supervisor, manager, onExit, persistence }: AppProps) {
   const { exit } = useApp();
@@ -637,8 +656,12 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     // 没开 menu：Tab 切任务面板
     if (key.tab) { setPanelMode('tasks'); return; }
 
-    // Esc 清输入 + 重置历史游标
+    // Esc：chatting 中 → 中断 Sup 当前回复（同 Claude Code）；空闲 → 清输入
     if (key.escape) {
+      if (state.status.kind === 'chatting') {
+        void supervisor.interrupt().catch(() => { /* 已结束 / 不支持 */ });
+        return;
+      }
       setInput('');
       historyCursor.current = -1;
       return;
@@ -884,7 +907,9 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         <Text dimColor>
           {slashMenuOpen
             ? '↑↓ 选 · Tab 补全 · Esc 取消'
-            : '↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令'}
+            : isChatting
+              ? '↵ 排队 · Esc 取消当前回复 · Tab 任务 · Ctrl+C 退出'
+              : '↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令'}
           {queueLen > 0 ? `  · queued: ${queueLen}` : ''}
         </Text>
       </Box>
