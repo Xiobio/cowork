@@ -20,7 +20,7 @@ import type {
   SessionMeta,
   WorkerSnapshot,
 } from '../session/storage.js';
-import { appendChat, saveWorkers, updateMeta } from '../session/storage.js';
+import { appendChat, listSessions, saveWorkers, updateMeta } from '../session/storage.js';
 import { Splash } from './components/Splash.js';
 import { Markdown } from './components/Markdown.js';
 import { reducer, initialState, mkMessageId, seedMessageId } from './state.js';
@@ -53,6 +53,7 @@ const HELP_TEXT = `可以试试：
   /peek <名字>          直接看工人近 20 条事件（不过总管 LLM）
   /clean               清理所有 stopped 工人
   /respawn <名字>       用历史工人的 cwd+prompt 重新招一个同名工人
+  /sessions            列出本目录下的所有 session
   /new                 提示如何新开 session`;
 
 export function App({ adapter, session, supervisor, manager, onExit, persistence }: AppProps) {
@@ -241,16 +242,33 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       if (hist.length > 200) hist.splice(0, hist.length - 200);
     }
 
-    // 如果正在 chatting，排入队列而不是立即跑
-    // /quit /clear /help /peek /clean /respawn /new 这些本地命令是否也排队？
-    // 答：都排队，更一致的语义。真的要立即 /quit 的可以 Ctrl+C。
+    // /quit /exit /clear 不排队 —— 这些本来就是要"立刻让我看到效果"的命令
+    if (trimmed === '/quit' || trimmed === '/exit') {
+      await onExit();
+      exit();
+      return;
+    }
+    if (trimmed === '/clear') {
+      dispatch({ type: 'clear-chat' });
+      flushedRef.current.clear();
+      return;
+    }
+
+    // 其它情况下 chatting 中就排队
     if (state.status.kind === 'chatting') {
+      const QUEUE_MAX = 50;
+      if (inputQueueRef.current.length >= QUEUE_MAX) {
+        // 队列满 —— 给用户一个错误反馈而不是悄悄丢
+        const id = mkMessageId();
+        dispatch({ type: 'sup-reply-started', messageId: id });
+        dispatch({ type: 'sup-text-final', messageId: id, text: `[排队已满] 待处理消息超过 ${QUEUE_MAX} 条，新消息被丢弃。等总管处理一下，或 Ctrl+C 退出。` });
+        dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+        return;
+      }
       inputQueueRef.current.push(trimmed);
       setQueueLen(inputQueueRef.current.length);
       return;
     }
-
-    if (trimmed === '/quit' || trimmed === '/exit') { await onExit(); exit(); return; }
     if (trimmed === '/help') {
       const id = mkMessageId();
       const uid = `u_${id}`;
@@ -262,7 +280,6 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       persistSup(id, HELP_TEXT);
       return;
     }
-    if (trimmed === '/clear') { dispatch({ type: 'clear-chat' }); flushedRef.current.clear(); return; }
     if (trimmed === '/new') {
       const id = mkMessageId();
       const uid = `u_${id}`;
@@ -273,6 +290,29 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'sup-text-final', messageId: id, text: hint });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, hint);
+      return;
+    }
+    if (trimmed === '/sessions') {
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const sessions = listSessions(cwd);
+      const lines: string[] = [];
+      lines.push(`本目录下 ${sessions.length} 个 session（最近的在上）：`);
+      lines.push('');
+      for (const s of sessions) {
+        const mark = s.id === persistence.meta.id ? '> ' : '  ';
+        lines.push(`${mark}\`${s.id}\``);
+        lines.push(`    adapter=${s.adapter}  lastUsed=${formatAge(new Date(s.lastUsedAt))}`);
+      }
+      lines.push('');
+      lines.push('切别的 session 要 /quit 后跑 `npm run dev -- --session <id>`');
+      const out = lines.join('\n');
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
       return;
     }
     if (trimmed.startsWith('/respawn ')) {
@@ -493,11 +533,22 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         </Box>
       )}
 
-      {/* 思考中指示器 */}
+      {/* 思考中指示器：显示当前工具 + 目标，比 "thinking N calls" 直观 */}
       {isChatting && !streamingMsg && (
         <Box paddingX={1}>
           <Text color="yellow"><Spinner type="dots" /></Text>
-          <Text dimColor> thinking ({state.currentTurnToolCalls} calls)</Text>
+          {state.currentTool ? (
+            <>
+              <Text dimColor> Sup 正在调 </Text>
+              <Text color="cyan">{state.currentTool.name}</Text>
+              {state.currentTool.target && (
+                <Text dimColor> → {state.currentTool.target}</Text>
+              )}
+              <Text dimColor> ({state.currentTurnToolCalls})</Text>
+            </>
+          ) : (
+            <Text dimColor> 思考中 ({state.currentTurnToolCalls} 次工具调用)</Text>
+          )}
         </Box>
       )}
 

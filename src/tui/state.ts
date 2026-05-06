@@ -36,6 +36,8 @@ export interface AppState {
   dormantWorkers: WorkerSnapshot[];
   /** 当前 turn 已经看到的工具调用次数（chat 开始时归零、chat 进行中增量）*/
   currentTurnToolCalls: number;
+  /** 当前 turn 最近一次的工具调用（thinking 指示器用），null 表示空闲或刚结束 turn */
+  currentTool: { name: string; target?: string } | null;
 }
 
 const CHAT_MAX = 100; // 永远保留最后 N 条消息在内存里
@@ -50,6 +52,7 @@ export const initialState = (adapterName: string, adapterDisplayName: string): A
   workers: [],
   dormantWorkers: [],
   currentTurnToolCalls: 0,
+  currentTool: null,
 });
 
 // ─── Actions ─────────────────────────────────────
@@ -105,6 +108,7 @@ export function reducer(state: AppState, action: Action): AppState {
         chat: trimChat([...state.chat, msg]),
         status: { kind: 'chatting' },
         currentTurnToolCalls: 0, // 新 turn 重置
+        currentTool: null,
       };
     }
 
@@ -147,6 +151,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         status: { kind: 'ready' },
         currentTurnToolCalls: 0,
+        currentTool: null,
         chat: state.chat.map((m) =>
           m.id === action.messageId && m.streaming ? { ...m, streaming: false } : m,
         ),
@@ -156,6 +161,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         currentTurnToolCalls: state.currentTurnToolCalls + 1,
+        currentTool: { name: action.toolName, target: action.workerName },
       };
 
     case 'error':

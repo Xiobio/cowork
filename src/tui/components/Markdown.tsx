@@ -169,6 +169,7 @@ function Inline({ text }: { text: string }) {
         if (n.kind === 'bold') return <Text key={i} bold><Inline text={n.text} /></Text>;
         if (n.kind === 'italic') return <Text key={i} italic><Inline text={n.text} /></Text>;
         if (n.kind === 'code') return <Text key={i} color="cyan" dimColor>{n.text}</Text>;
+        if (n.kind === 'link') return <Text key={i} color="blue" underline>{n.text} ({n.url})</Text>;
         return null;
       })}
     </Text>
@@ -179,7 +180,8 @@ type InlineNode =
   | { kind: 'text'; text: string }
   | { kind: 'bold'; text: string }
   | { kind: 'italic'; text: string }
-  | { kind: 'code'; text: string };
+  | { kind: 'code'; text: string }
+  | { kind: 'link'; text: string; url: string };
 
 function parseInline(text: string): InlineNode[] {
   const out: InlineNode[] = [];
@@ -195,6 +197,14 @@ function parseInline(text: string): InlineNode[] {
 
   while (i < text.length) {
     const rest = text.slice(i);
+
+    // [text](url)
+    const link = rest.match(/^\[([^\]]+)\]\(([^)\s]+)\)/);
+    if (link) {
+      out.push({ kind: 'link', text: link[1] ?? '', url: link[2] ?? '' });
+      i += link[0].length;
+      continue;
+    }
 
     // **bold**
     const bold = rest.match(/^\*\*([^*]+?)\*\*/);
