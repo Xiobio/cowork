@@ -42,6 +42,26 @@ interface AppProps {
 
 type PanelMode = 'chat' | 'tasks';
 
+/** Slash 命令注册表：自动补全 + 帮助文本都从这里来 */
+const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
+  { name: '/help',     usage: '/help',           desc: '看试玩建议和命令列表' },
+  { name: '/quit',     usage: '/quit',           desc: '退出（停所有工人；session 自动保存）' },
+  { name: '/exit',     usage: '/exit',           desc: '同 /quit' },
+  { name: '/clear',    usage: '/clear',          desc: '清屏（不影响 session 历史）' },
+  { name: '/peek',     usage: '/peek <名字>',    desc: '直接看工人近 20 条事件，不过 Sup' },
+  { name: '/clean',    usage: '/clean',          desc: '从 map 里清掉所有 stopped 工人' },
+  { name: '/respawn',  usage: '/respawn <名字>', desc: '用历史工人的 cwd+prompt 重新拉起' },
+  { name: '/sessions', usage: '/sessions',       desc: '列本目录下所有 session（带 chat 数）' },
+  { name: '/persona',  usage: '/persona [id]',   desc: '看/切换 Sup 人设（10 套）' },
+  { name: '/new',      usage: '/new',            desc: '提示如何新开 session' },
+];
+
+function findMatchingCommands(input: string): typeof SLASH_COMMANDS {
+  if (!input.startsWith('/')) return [];
+  const head = input.split(/\s/)[0] ?? '';
+  return SLASH_COMMANDS.filter((c) => c.name.startsWith(head));
+}
+
 const HELP_TEXT = `可以试试：
   招一个工人叫小A，D:/proj/test，只说hello然后停
   现在大家都怎么样
@@ -81,6 +101,15 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
   // 输入历史：用户之前发过的消息，用 up/down 回翻。
   const historyRef = useRef<string[]>([]);
   const historyCursor = useRef<number>(-1); // -1 = 当前草稿，否则 index into historyRef
+
+  // Slash 命令补全：当前输入以 / 开头时打开 dropdown
+  const slashMatches = findMatchingCommands(input);
+  const slashMenuOpen = input.startsWith('/') && slashMatches.length > 0;
+  const [slashCursor, setSlashCursor] = useState(0);
+  // 输入变化时把 cursor reset 到 0（避免越界）
+  useEffect(() => {
+    if (slashCursor >= slashMatches.length) setSlashCursor(0);
+  }, [slashMatches.length, slashCursor]);
 
   // 已经通过 <Static> 输出过的消息 ID，防止重复输出
   const flushedRef = useRef(new Set<string>());
@@ -460,6 +489,21 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       return;
     }
 
+    // 未注册的 / 命令：不要扔给 Sup 当人话，给个友好错误
+    if (trimmed.startsWith('/')) {
+      const head = trimmed.split(/\s/)[0] ?? '';
+      const id = mkMessageId();
+      const uid = `u_${id}`;
+      dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
+      persistUser(uid, trimmed);
+      dispatch({ type: 'sup-reply-started', messageId: id });
+      const out = `不认识 \`${head}\`。可选命令：${SLASH_COMMANDS.map(c => c.name).join(', ')}\n（输入 \`/\` 会弹出补全菜单）`;
+      dispatch({ type: 'sup-text-final', messageId: id, text: out });
+      dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+      persistSup(id, out);
+      return;
+    }
+
     const uid = `u_${mkMessageId()}`;
     const sid = `s_${mkMessageId()}`;
     dispatch({ type: 'user-submit', text: trimmed, messageId: uid });
@@ -538,7 +582,28 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       return;
     }
 
-    // chat 模式下
+    // ─── chat 模式 ───
+    // Slash 命令菜单打开时，↑↓ 导航菜单、Tab 自动补全、Esc 取消。
+    if (slashMenuOpen) {
+      if (key.upArrow) { setSlashCursor((c) => (c - 1 + slashMatches.length) % slashMatches.length); return; }
+      if (key.downArrow) { setSlashCursor((c) => (c + 1) % slashMatches.length); return; }
+      if (key.tab) {
+        const cmd = slashMatches[slashCursor];
+        if (cmd) {
+          const needsArg = cmd.usage.includes('<') || cmd.usage.includes('[');
+          setInput(cmd.name + (needsArg ? ' ' : ''));
+        }
+        return;
+      }
+      if (key.escape) {
+        setInput('');
+        return;
+      }
+      // 否则放过给 TextInput
+      return;
+    }
+
+    // 没开 menu：Tab 切任务面板
     if (key.tab) { setPanelMode('tasks'); return; }
 
     // Esc 清输入 + 重置历史游标
@@ -577,7 +642,18 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
   // ─── Splash ─────────────────────
 
   const hideSplash = useCallback(() => setShowSplash(false), []);
-  if (showSplash) return <Splash width={cols} onDone={hideSplash} />;
+  if (showSplash) {
+    const personaName = getPersonaOrDefault(persistence.meta.personaId).name;
+    return (
+      <Splash
+        width={cols}
+        adapterName={adapter.displayName}
+        personaName={personaName}
+        resumed={persistence.resumed}
+        onDone={hideSplash}
+      />
+    );
+  }
 
   // ─── 完成的消息 → Static 输出（永久进入 scrollback）─────────
 
@@ -712,6 +788,26 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         </Box>
       )}
 
+      {/* Slash 命令补全 dropdown */}
+      {slashMenuOpen && (
+        <Box flexDirection="column" paddingX={1}>
+          <Text dimColor>──── commands ────</Text>
+          {slashMatches.map((cmd, i) => {
+            const focused = i === slashCursor;
+            return (
+              <Box key={cmd.name}>
+                <Text color={focused ? 'cyan' : undefined} bold={focused}>
+                  {focused ? '› ' : '  '}
+                  {cmd.usage.padEnd(20)}
+                </Text>
+                <Text dimColor> {cmd.desc}</Text>
+              </Box>
+            );
+          })}
+          <Text dimColor>  ↑↓ 选择 · Tab 补全 · Esc 取消</Text>
+        </Box>
+      )}
+
       {/* 输入框 —— 总是显示，chatting 时提交到队列而不是立即发送 */}
       <Box paddingX={1}>
         <Text color={isChatting ? 'yellow' : 'cyan'} bold>&gt; </Text>
@@ -722,7 +818,9 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       <Text dimColor>{line}</Text>
       <Box paddingX={1}>
         <Text dimColor>
-          ↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · /help
+          {slashMenuOpen
+            ? '↑↓ 选 · Tab 补全 · Esc 取消'
+            : '↵ 发送 · ↑↓ 历史 · Ctrl+L 清屏 · Esc 清输入 · Tab 任务 · / 命令'}
           {queueLen > 0 ? `  · queued: ${queueLen}` : ''}
         </Text>
       </Box>
