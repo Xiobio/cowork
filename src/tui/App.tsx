@@ -704,9 +704,10 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
         persistSup(sid, finalText);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        dispatch({ type: 'sup-text-final', messageId: sid, text: `[error] /compact 失败：${msg}` });
+        const errText = `**❌ /compact 失败**\n\n${msg}`;
+        dispatch({ type: 'sup-text-final', messageId: sid, text: errText });
         dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: 0 });
-        persistSup(sid, `[error] ${msg}`);
+        persistSup(sid, errText);
       }
       return;
     }
@@ -861,9 +862,10 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'workers-refreshed', workers: mapWorkers(manager.listWorkers()) });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      dispatch({ type: 'sup-text-final', messageId: sid, text: `[error] ${msg}` });
+      const errText = `**❌ Sup 调用出错**\n\n${msg}`;
+      dispatch({ type: 'sup-text-final', messageId: sid, text: errText });
       dispatch({ type: 'sup-turn-completed', messageId: sid, toolCallCount: 0 });
-      persistSup(sid, `[error] ${msg}`);
+      persistSup(sid, errText);
     }
   }, [supervisor, manager, onExit, exit, persistUser, persistSup, state.dormantWorkers, state.status.kind, hasInteracted]);
 
