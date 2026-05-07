@@ -1532,6 +1532,7 @@ function renderPeek(manager: WorkerManager, name: string): string {
   const lines: string[] = [];
   lines.push(`[${name}] state=${worker.state} · ${worker.eventCount} 条事件 · ${formatTokens(worker.tokenUsed)} · ${worker.currentAction ? '正在 ' + worker.currentAction : '空闲'}`);
   lines.push(`cwd: ${worker.cwd}`);
+  lines.push(`adapter: ${worker.adapterName} · pid: ${worker.pid} · cliSessionId: ${worker.cliSessionId ?? '(未拿到)'}`);
   lines.push(`任务: ${worker.initialPrompt}`);
   lines.push('');
   if (events.length === 0) {
