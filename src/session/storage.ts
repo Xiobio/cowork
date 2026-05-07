@@ -86,7 +86,8 @@ export interface SessionBundle {
 
 // ─── 路径工具 ─────────────────────────────────
 
-export function sessionsRoot(cwd: string): string {
+/** sessions 目录根。仅 storage.ts 内部用，不对外。 */
+function sessionsRoot(cwd: string): string {
   return join(cwd, '.cowork', 'sessions');
 }
 
@@ -108,7 +109,8 @@ function workersPath(cwd: string, id: string): string {
 
 // ─── 生成 id ─────────────────────────────────
 
-export function newSessionId(): string {
+/** ISO timestamp + 替换 :. 为 -，作 session 目录名。仅内部用。 */
+function newSessionId(): string {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
