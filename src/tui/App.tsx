@@ -107,7 +107,7 @@ const HELP_TEXT = `## 试玩建议
 
   /peek <名字>          直接看工人近 20 条事件（不过 Sup）
   /clean               清掉所有 stopped 工人
-  /respawn <名字>       用历史 cwd+prompt 重新招同名工人
+  /respawn [名字]       重新招 dormant 工人；不带名字弹交互选择器
 
 ## Session
 
