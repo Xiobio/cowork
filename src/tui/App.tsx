@@ -877,7 +877,17 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
     // Modal 模式优先吃所有键（persona / respawn 共用导航逻辑）
     if (activeModal === 'persona') {
-      if (key.escape) { setActiveModal(null); return; }
+      if (key.escape) {
+        setActiveModal(null);
+        // 之前的 user-submit 已经留下"/persona"在 chat 里，没有 sup 回应看起来像断了
+        const id = mkMessageId();
+        dispatch({ type: 'sup-reply-started', messageId: id });
+        const out = '_（已取消，没切人设。）_';
+        dispatch({ type: 'sup-text-final', messageId: id, text: out });
+        dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+        persistSup(id, out);
+        return;
+      }
       if (key.upArrow) { setModalCursor((c) => (c - 1 + PERSONAS.length) % PERSONAS.length); return; }
       if (key.downArrow) { setModalCursor((c) => (c + 1) % PERSONAS.length); return; }
       if (key.return) {
@@ -906,7 +916,16 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
     if (activeModal === 'respawn') {
       const dormants = state.dormantWorkers;
-      if (key.escape) { setActiveModal(null); return; }
+      if (key.escape) {
+        setActiveModal(null);
+        const id = mkMessageId();
+        dispatch({ type: 'sup-reply-started', messageId: id });
+        const out = '_（已取消，没拉起 dormant 工人。）_';
+        dispatch({ type: 'sup-text-final', messageId: id, text: out });
+        dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
+        persistSup(id, out);
+        return;
+      }
       if (dormants.length === 0) {
         // 不应该到这里 —— 打开前已检查
         setActiveModal(null);
