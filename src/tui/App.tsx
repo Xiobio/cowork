@@ -63,6 +63,7 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/peek',     usage: '/peek <名字>',    desc: '直接看工人近 20 条事件，不过 Sup' },
   { name: '/clean',    usage: '/clean',          desc: '从 map 里清掉所有 stopped 工人' },
   { name: '/respawn',  usage: '/respawn <名字>', desc: '用历史工人的 cwd+prompt 重新拉起' },
+  { name: '/say',      usage: '/say <名字> <消息>', desc: '直接给工人发消息（不过 Sup）' },
   { name: '/sessions', usage: '/sessions',       desc: '列本目录下所有 session（带 chat 数）' },
   { name: '/persona',  usage: '/persona [id]',   desc: '看/切换 Sup 人设（10 套）' },
   { name: '/model',    usage: '/model [id]',     desc: '看/切换 Sup 用的 LLM 模型（重启生效）' },
@@ -108,6 +109,7 @@ const HELP_TEXT = `## 试玩建议
   /peek <名字>          直接看工人近 20 条事件（不过 Sup）
   /clean               清掉所有 stopped 工人
   /respawn [名字]       重新招 dormant 工人；不带名字弹交互选择器
+  /say <名字> <消息>     直接给工人发消息（不过 Sup，省 token）
 
 ## Session
 
@@ -808,6 +810,29 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'sup-text-final', messageId: id, text: hint });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, hint);
+      return;
+    }
+
+    // /say <name> <message> —— 直接给工人发，不过 Sup（节省 Sup token）
+    if (trimmed.startsWith('/say ')) {
+      const rest = trimmed.slice('/say '.length).trim();
+      const spaceIdx = rest.search(/\s/);
+      let out: string;
+      if (spaceIdx <= 0) {
+        out = '用法：`/say <名字> <消息>`。例：`/say 小A 跑下测试`。直接给工人发，不通过 Sup（省 token，但 Sup 不知情）。';
+      } else {
+        const name = rest.slice(0, spaceIdx);
+        const message = rest.slice(spaceIdx + 1).trim();
+        if (!message) {
+          out = '消息不能为空';
+        } else {
+          const r = await manager.sendToWorker(name, message);
+          out = r.ok
+            ? `✓ 已直发给 **${name}**：\n\n  ${message}\n\n_Sup 不知道这条消息，下次问 Sup 状态时它会从工人事件里看到。_`
+            : `✗ 发送失败：${r.error}`;
+        }
+      }
+      replyLocally(trimmed, out);
       return;
     }
 
