@@ -890,10 +890,16 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
     try {
       const result = await supervisor.chat(trimmed, makeChatObserver(sid));
-      // 用户 Esc 中断 → 在文本末尾加可见标记
-      const finalText = result.stopReason === 'interrupted'
-        ? (result.text || '') + '\n\n_↩ 已取消_'
-        : result.text;
+      // 末尾文本：根据 stopReason 决定加什么标记
+      let finalText = result.text;
+      if (result.stopReason === 'interrupted') {
+        finalText = (finalText || '') + '\n\n_↩ 已取消_';
+      } else if (!finalText.trim()) {
+        // Sup 没产出文本（可能 turn 提前结束 / max_tokens / 错误兜底）
+        finalText = `_（总管没有回话，stopReason=${result.stopReason}。${
+          result.toolCallCount > 0 ? '它调了 ' + result.toolCallCount + ' 次工具但没说话；' : ''
+        }可以再问一次。）_`;
+      }
       dispatch({ type: 'sup-text-final', messageId: sid, text: finalText });
       dispatch({
         type: 'sup-turn-completed',
