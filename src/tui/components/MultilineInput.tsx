@@ -88,11 +88,20 @@ export function MultilineInput({
     return <Text dimColor>{placeholder}</Text>;
   }
 
-  const lines = value.split('\n');
+  const allLines = value.split('\n');
+  // 多行输入封顶：超过 MAX_VISIBLE 行只显示最后 N 行 + "(+N 行在上)" 指示。
+  // 防止粘贴长文时把整个 TUI 顶掉。
+  const MAX_VISIBLE = 5;
+  const overflow = Math.max(0, allLines.length - MAX_VISIBLE);
+  const visible = overflow > 0 ? allLines.slice(-MAX_VISIBLE) : allLines;
+
   return (
     <Box flexDirection="column">
-      {lines.map((ln, i) => {
-        const isLast = i === lines.length - 1;
+      {overflow > 0 && (
+        <Text dimColor italic>↑ +{overflow} 行（已折叠，仍会发送）</Text>
+      )}
+      {visible.map((ln, i) => {
+        const isLast = i === visible.length - 1;
         return (
           <Box key={i}>
             <Text>{ln}</Text>
