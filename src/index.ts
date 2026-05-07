@@ -532,11 +532,18 @@ function printSessionList(): void {
   console.log(`本目录下的 cowork session（${sessions.length} 个，新的在上）：\n`);
   for (const s of sessions) {
     const age = formatTimeAgo(new Date(s.lastUsedAt));
+    const tags: string[] = [];
+    tags.push(`adapter=${s.adapter}`);
+    if (s.personaId) tags.push(`persona=${s.personaId}`);
+    if (s.model) tags.push(`model=${s.model}`);
+    if (s.compactedSummary) tags.push('📎 compact');
     console.log(`  ${s.id}`);
-    console.log(`    adapter=${s.adapter}  lastUsed=${age}  ${s.chatLines} chat · ${s.workerCount} workers`);
+    console.log(`    ${tags.join(' · ')}`);
+    console.log(`    lastUsed=${age}  ${s.chatLines} chat · ${s.workerCount} workers`);
   }
   console.log(`\nresume 指定的：  npm run dev -- --session <id>`);
   console.log(`新开一个：       npm run dev -- --new`);
+  console.log(`删除指定：       npm run dev -- --delete-session <id>`);
 }
 
 function formatTimeAgo(d: Date): string {

@@ -740,11 +740,18 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       lines.push('');
       for (const s of sessions) {
         const mark = s.id === persistence.meta.id ? '> ' : '  ';
+        const tags: string[] = [];
+        tags.push(`adapter=${s.adapter}`);
+        if (s.personaId) tags.push(`persona=${s.personaId}`);
+        if (s.model) tags.push(`model=${s.model}`);
+        if (s.compactedSummary) tags.push('📎 compact');
         lines.push(`${mark}\`${s.id}\``);
-        lines.push(`    adapter=${s.adapter}  lastUsed=${formatAge(new Date(s.lastUsedAt))}  ${s.chatLines} chat · ${s.workerCount} workers`);
+        lines.push(`    ${tags.join(' · ')}`);
+        lines.push(`    lastUsed=${formatAge(new Date(s.lastUsedAt))}  ${s.chatLines} chat · ${s.workerCount} workers`);
       }
       lines.push('');
       lines.push('切别的 session 要 /quit 后跑 `npm run dev -- --session <id>`');
+      lines.push('删某个 session：`npm run dev -- --delete-session <id>`');
       replyLocally(trimmed, lines.join('\n'));
       return;
     }
