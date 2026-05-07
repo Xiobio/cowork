@@ -154,6 +154,8 @@ TUI 里 `/help` 看建议的试玩问题，`/quit` 或 Ctrl+C 退出。
 | `/peek <名字>` | 直接看工人近 20 条事件，不过 Sup |
 | `/clean` | 清掉所有 stopped 工人 |
 | `/respawn [名字]` | 拉起 dormant 工人；不带名字弹交互选择器 |
+| `/say <名字> <消息>` | 直接给工人发消息（不过 Sup，省 token） |
+| `/kill <名字>` | 直接停工人（不过 Sup） |
 | `/sessions` | 列本目录所有 session |
 | `/persona [id]` | 切 Sup 人设（10 套）；不带 id 弹交互选择器 |
 | `/model [id]` | 切 Sup 用的 LLM 模型（重启生效） |
