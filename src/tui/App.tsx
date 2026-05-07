@@ -390,6 +390,42 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     [persistUser, persistSup],
   );
 
+  /**
+   * 真 Sup 调用的 ChatObserver 工厂 —— 让所有 supervisor.chat 调用的观察行为
+   * 一致：流式 delta / 工具调用持久化 / 错误回填。
+   * 主 handleSubmit 和 /compact 都用它。
+   */
+  const makeChatObserver = useCallback(
+    (sid: string): ChatObserver => ({
+      onTextDelta: (delta) => dispatch({ type: 'sup-text-delta', messageId: sid, delta }),
+      onToolCall: (toolName, inputObj) => {
+        const callId = mkMessageId();
+        const shortName = shortenToolName(toolName);
+        const argsSummary = summarizeInput(inputObj);
+        dispatch({
+          type: 'tool-call',
+          callId,
+          toolName: shortName,
+          inputSummary: argsSummary,
+          workerName: extractWorkerName(inputObj),
+        });
+        persistTool(callId, shortName, argsSummary);
+      },
+      onToolResult: (_callId, output, isError) => {
+        if (isError) {
+          const s = typeof output === 'string' ? output : JSON.stringify(output);
+          const preview = s.length > 120 ? s.slice(0, 117) + '…' : s;
+          dispatch({ type: 'tool-result-error', preview });
+        }
+      },
+      onError: (message, fatal) => {
+        dispatch({ type: 'error', message });
+        if (fatal) void onExit();
+      },
+    }),
+    [persistTool, onExit],
+  );
+
   const handleSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -638,23 +674,8 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       persistUser(uid, trimmed);
       dispatch({ type: 'sup-reply-started', messageId: sid });
 
-      const observer: ChatObserver = {
-        onTextDelta: (delta) => dispatch({ type: 'sup-text-delta', messageId: sid, delta }),
-        onToolCall: (toolName, inputObj) => {
-          dispatch({
-            type: 'tool-call',
-            callId: mkMessageId(),
-            toolName: shortenToolName(toolName),
-            inputSummary: summarizeInput(inputObj),
-            workerName: extractWorkerName(inputObj),
-          });
-        },
-        onToolResult: () => {},
-        onError: (message) => { dispatch({ type: 'error', message }); },
-      };
-
       try {
-        const result = await supervisor.chat(compactPrompt, observer);
+        const result = await supervisor.chat(compactPrompt, makeChatObserver(sid));
         const path = saveCompact(cwd, persistence.meta.id, result.text);
         updateMeta(cwd, persistence.meta.id, { compactedSummary: result.text });
         const finalText = result.text + `\n\n_↑ 上面是 compact 总结，已保存到 \`${path}\` 和 session meta。下次 \`--new\` 起新 session 时会自动塞进 Sup 的初始 context。_`;
@@ -801,29 +822,8 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
     persistUser(uid, trimmed);
     dispatch({ type: 'sup-reply-started', messageId: sid });
 
-    const observer: ChatObserver = {
-      onTextDelta: (delta) => dispatch({ type: 'sup-text-delta', messageId: sid, delta }),
-      onToolCall: (toolName, inputObj) => {
-        const callId = mkMessageId();
-        const shortName = shortenToolName(toolName);
-        const argsSummary = summarizeInput(inputObj);
-        dispatch({ type: 'tool-call', callId, toolName: shortName, inputSummary: argsSummary, workerName: extractWorkerName(inputObj) });
-        persistTool(callId, shortName, argsSummary);
-      },
-      onToolResult: (_callId, output, isError) => {
-        if (isError) {
-          const preview = (() => {
-            const s = typeof output === 'string' ? output : JSON.stringify(output);
-            return s.length > 120 ? s.slice(0, 117) + '…' : s;
-          })();
-          dispatch({ type: 'tool-result-error', preview });
-        }
-      },
-      onError: (message, fatal) => { dispatch({ type: 'error', message }); if (fatal) void onExit(); },
-    };
-
     try {
-      const result = await supervisor.chat(trimmed, observer);
+      const result = await supervisor.chat(trimmed, makeChatObserver(sid));
       // 用户 Esc 中断 → 在文本末尾加可见标记
       const finalText = result.stopReason === 'interrupted'
         ? (result.text || '') + '\n\n_↩ 已取消_'
