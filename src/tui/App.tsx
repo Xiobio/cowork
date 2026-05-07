@@ -64,6 +64,7 @@ const SLASH_COMMANDS: { name: string; usage: string; desc: string }[] = [
   { name: '/clean',    usage: '/clean',          desc: '从 map 里清掉所有 stopped 工人' },
   { name: '/respawn',  usage: '/respawn <名字>', desc: '用历史工人的 cwd+prompt 重新拉起' },
   { name: '/say',      usage: '/say <名字> <消息>', desc: '直接给工人发消息（不过 Sup）' },
+  { name: '/kill',     usage: '/kill <名字>',    desc: '直接停工人（不过 Sup）' },
   { name: '/sessions', usage: '/sessions',       desc: '列本目录下所有 session（带 chat 数）' },
   { name: '/persona',  usage: '/persona [id]',   desc: '看/切换 Sup 人设（10 套）' },
   { name: '/model',    usage: '/model [id]',     desc: '看/切换 Sup 用的 LLM 模型（重启生效）' },
@@ -110,6 +111,7 @@ const HELP_TEXT = `## 试玩建议
   /clean               清掉所有 stopped 工人
   /respawn [名字]       重新招 dormant 工人；不带名字弹交互选择器
   /say <名字> <消息>     直接给工人发消息（不过 Sup，省 token）
+  /kill <名字>          直接停工人（不过 Sup）
 
 ## Session
 
@@ -810,6 +812,22 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       dispatch({ type: 'sup-text-final', messageId: id, text: hint });
       dispatch({ type: 'sup-turn-completed', messageId: id, toolCallCount: 0 });
       persistSup(id, hint);
+      return;
+    }
+
+    // /kill <name> —— 直接停工人，不过 Sup
+    if (trimmed.startsWith('/kill ')) {
+      const name = trimmed.slice('/kill '.length).trim();
+      let out: string;
+      if (!name) {
+        out = '用法：`/kill <名字>`。直接停一个工人，不过 Sup。';
+      } else {
+        const r = await manager.killWorker(name, true);
+        out = r.ok
+          ? `✓ 已停 **${name}**。\n\n_Sup 不知情，下次问它工人状态时会从 stopped 事件看到。_`
+          : `✗ kill 失败：${r.error}`;
+      }
+      replyLocally(trimmed, out);
       return;
     }
 
