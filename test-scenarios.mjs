@@ -14,19 +14,19 @@ import { IpcServer } from './dist/worker-manager/ipc-server.js';
 import { IpcClient } from './dist/worker-manager/ipc-client.js';
 import { getAdapter } from './dist/sup-runtime/registry.js';
 import {
-  createSession,
   appendChat,
-  saveWorkers,
-  loadSession,
+  createSession,
+  deleteSession,
   findLatestSession,
   listSessions,
-  touchSession,
-  readChatTail,
-  summarizeAllSessions,
   loadProjectMd,
+  loadSession,
   projectMdExists,
+  readChatTail,
+  saveWorkers,
+  summarizeAllSessions,
+  touchSession,
   writeProjectMdTemplate,
-  deleteSession,
 } from './dist/session/storage.js';
 import { PERSONAS, getPersona, getPersonaOrDefault } from './dist/persona/index.js';
 import { buildSupervisorPrompt } from './dist/supervisor.js';
