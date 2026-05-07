@@ -46,7 +46,7 @@ type Block =
   | { kind: 'blank' }
   | { kind: 'p'; text: string };
 
-function parseBlocks(src: string): Block[] {
+export function parseBlocks(src: string): Block[] {
   const lines = src.split(/\r?\n/);
   const out: Block[] = [];
   let i = 0;
@@ -280,14 +280,14 @@ function Inline({ text }: { text: string }) {
   );
 }
 
-type InlineNode =
+export type InlineNode =
   | { kind: 'text'; text: string }
   | { kind: 'bold'; text: string }
   | { kind: 'italic'; text: string }
   | { kind: 'code'; text: string }
   | { kind: 'link'; text: string; url: string };
 
-function parseInline(text: string): InlineNode[] {
+export function parseInline(text: string): InlineNode[] {
   const out: InlineNode[] = [];
   let i = 0;
   const push = (kind: InlineNode['kind'], s: string) => {

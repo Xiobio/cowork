@@ -30,6 +30,7 @@ import {
 } from './dist/session/storage.js';
 import { PERSONAS, getPersona, getPersonaOrDefault } from './dist/persona/index.js';
 import { buildSupervisorPrompt } from './dist/supervisor.js';
+import { parseBlocks, parseInline } from './dist/tui/components/Markdown.js';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -631,6 +632,42 @@ async function scenario6_5_SessionStorage(round) {
     const promptWithMd = buildSupervisorPrompt('office', null, md);
     if (!promptWithMd.includes(md)) errors.push('buildSupervisorPrompt 应包含 projectMd');
     if (!promptWithMd.includes('项目背景')) errors.push('projectMd 应有 header');
+
+    // Markdown 解析回归
+    // 行内：bold / italic / code / link
+    const inline1 = parseInline('**bold** _it_ `code` [a](http://x)');
+    if (inline1.length < 4) errors.push(`parseInline: 应至少 4 nodes, 实 ${inline1.length}`);
+    const boldNode = inline1.find((n) => n.kind === 'bold');
+    if (!boldNode || boldNode.text !== 'bold') errors.push('parseInline: bold 提取错');
+    const codeNode = inline1.find((n) => n.kind === 'code');
+    if (!codeNode || codeNode.text !== 'code') errors.push('parseInline: code 提取错');
+    const linkNode = inline1.find((n) => n.kind === 'link');
+    if (!linkNode || linkNode.text !== 'a' || linkNode.url !== 'http://x')
+      errors.push('parseInline: link 提取错');
+
+    // 块级：标题 / bullet / fenced code / quote / table
+    const blocks = parseBlocks([
+      '# h1',
+      '',
+      '- bullet 1',
+      '- bullet 2',
+      '',
+      '> quote',
+      '',
+      '```js',
+      'console.log(1)',
+      '```',
+      '',
+      '| a | b |',
+      '|---|---|',
+      '| 1 | 2 |',
+    ].join('\n'));
+    const kinds = blocks.map((b) => b.kind);
+    if (!kinds.includes('h1')) errors.push('parseBlocks: 没识别 h1');
+    if (!kinds.includes('bullet')) errors.push('parseBlocks: 没识别 bullet');
+    if (!kinds.includes('quote')) errors.push('parseBlocks: 没识别 quote');
+    if (!kinds.includes('code')) errors.push('parseBlocks: 没识别 code');
+    if (!kinds.includes('table')) errors.push('parseBlocks: 没识别 table');
 
     // deleteSession：建一个，删它，验证 listSessions 不再含
     const toDelete = createSession(root, 'claude');
