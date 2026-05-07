@@ -26,6 +26,7 @@ import {
   loadProjectMd,
   projectMdExists,
   writeProjectMdTemplate,
+  deleteSession,
 } from './dist/session/storage.js';
 import { PERSONAS, getPersona, getPersonaOrDefault } from './dist/persona/index.js';
 import { buildSupervisorPrompt } from './dist/supervisor.js';
@@ -630,6 +631,16 @@ async function scenario6_5_SessionStorage(round) {
     const promptWithMd = buildSupervisorPrompt('office', null, md);
     if (!promptWithMd.includes(md)) errors.push('buildSupervisorPrompt 应包含 projectMd');
     if (!promptWithMd.includes('项目背景')) errors.push('projectMd 应有 header');
+
+    // deleteSession：建一个，删它，验证 listSessions 不再含
+    const toDelete = createSession(root, 'claude');
+    const beforeDel = listSessions(root).filter((m) => m.id === toDelete.id).length;
+    if (beforeDel !== 1) errors.push(`删之前应有 ${toDelete.id}, beforeDel=${beforeDel}`);
+    const ok = deleteSession(root, toDelete.id);
+    if (!ok) errors.push('deleteSession 返回 false');
+    const afterDel = listSessions(root).filter((m) => m.id === toDelete.id).length;
+    if (afterDel !== 0) errors.push(`删之后不应有 ${toDelete.id}, afterDel=${afterDel}`);
+    if (deleteSession(root, 'no_such_session')) errors.push('删不存在 session 应返回 false');
 
     // summarizeAllSessions 应包含 chatLines / workerCount
     const summaries = summarizeAllSessions(root);

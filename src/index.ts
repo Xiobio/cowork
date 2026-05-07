@@ -31,6 +31,7 @@ import { IpcServer, type IpcServerInfo } from './worker-manager/ipc-server.js';
 import { runTui } from './tui/index.js';
 import {
   createSession,
+  deleteSession,
   findLatestCompactedSummary,
   findLatestSession,
   loadProjectMd,
@@ -62,6 +63,8 @@ interface CliArgs {
   cleanOrphans: boolean;
   /** --persona <id>: 创建新 session 时强制指定人设 id */
   personaId: string | null;
+  /** --delete-session <id>: 删除指定 session 后退出 */
+  deleteSessionId: string | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -79,6 +82,7 @@ function parseArgs(argv: string[]): CliArgs {
     listSessions: false,
     cleanOrphans: false,
     personaId: null,
+    deleteSessionId: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -112,6 +116,10 @@ function parseArgs(argv: string[]): CliArgs {
       args.personaId = argv[++i] ?? null;
     } else if (a?.startsWith('--persona=')) {
       args.personaId = a.slice('--persona='.length);
+    } else if (a === '--delete-session') {
+      args.deleteSessionId = argv[++i] ?? null;
+    } else if (a?.startsWith('--delete-session=')) {
+      args.deleteSessionId = a.slice('--delete-session='.length);
     } else if (a === '--verbose' || a === '-v') {
       args.verbose = true;
     } else if (a === '--help' || a === '-h') {
@@ -132,6 +140,7 @@ function printHelp(): void {
   npm run dev -- --new                 强制新开一个 session（不 resume）
   npm run dev -- --session <id>        resume 指定的 session（--list-sessions 看 id）
   npm run dev -- --list-sessions       列出本目录下所有 session
+  npm run dev -- --delete-session <id> 删除指定 session 后退出
   npm run dev -- --clean-orphans       Windows: 杀掉其它 cowork main 进程及其子进程后退出
   npm run dev -- --persona=<id>        为新 session 选人设（默认 office；TUI 内 /persona 也行）
   npm run dev -- --adapter=<name>      切换 adapter
@@ -220,6 +229,12 @@ async function main(): Promise<void> {
     const r2 = cleanupOrphansSync();
     console.log(`清掉 ${r1.killed} 个 cowork main 进程及其子进程；另扫到 ${r2.killed} 个孤儿 CLI`);
     if (r1.pids.length > 0) console.log(`cowork main pid: ${r1.pids.join(', ')}`);
+    return;
+  }
+
+  if (args.deleteSessionId) {
+    const ok = deleteSession(process.cwd(), args.deleteSessionId);
+    console.log(ok ? `已删 session ${args.deleteSessionId}` : `删失败：找不到 ${args.deleteSessionId}`);
     return;
   }
 

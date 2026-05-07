@@ -28,6 +28,7 @@ import {
   openSync,
   readSync,
   closeSync,
+  rmSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
@@ -389,6 +390,21 @@ export function summarizeAllSessions(cwd: string): SessionSummary[] {
   return listSessions(cwd)
     .map((m) => summarizeSession(cwd, m.id))
     .filter((s): s is SessionSummary => s !== null);
+}
+
+/**
+ * 删除指定 session 的目录（meta.json / chat.jsonl / workers.json / compact.md
+ * 都一起干掉）。返回删除是否成功。安全：找不到目录直接返回 false。
+ */
+export function deleteSession(cwd: string, id: string): boolean {
+  const dir = sessionDir(cwd, id);
+  if (!existsSync(dir)) return false;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function loadSession(cwd: string, id: string): SessionBundle | null {
