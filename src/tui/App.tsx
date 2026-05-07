@@ -680,9 +680,16 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
       try {
         const result = await supervisor.chat(compactPrompt, makeChatObserver(sid));
-        const path = saveCompact(cwd, persistence.meta.id, result.text);
-        updateMeta(cwd, persistence.meta.id, { compactedSummary: result.text });
-        const finalText = result.text + `\n\n_↑ 上面是 compact 总结，已保存到 \`${path}\` 和 session meta。下次 \`--new\` 起新 session 时会自动塞进 Sup 的初始 context。_`;
+        // Sup 可能因为中断 / 错误返回空文本；空摘要保存了反而坏事 —— 下次注入空字符串
+        const trimmedText = (result.text ?? '').trim();
+        let finalText: string;
+        if (!trimmedText) {
+          finalText = `_/compact 没拿到摘要内容（stopReason=${result.stopReason}），已跳过保存。可能 Sup 被中断或没产出 —— 重试或 /quit 重启再试。_`;
+        } else {
+          const path = saveCompact(cwd, persistence.meta.id, trimmedText);
+          updateMeta(cwd, persistence.meta.id, { compactedSummary: trimmedText });
+          finalText = trimmedText + `\n\n_↑ 上面是 compact 总结，已保存到 \`${path}\` 和 session meta。下次 \`--new\` 起新 session 时会自动塞进 Sup 的初始 context。_`;
+        }
         dispatch({ type: 'sup-text-final', messageId: sid, text: finalText });
         dispatch({
           type: 'sup-turn-completed',
