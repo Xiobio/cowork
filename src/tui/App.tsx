@@ -26,6 +26,7 @@ import {
   loadProjectMd,
   projectMdExists,
   projectMdPath,
+  readChatTail,
   saveCompact,
   saveWorkers,
   summarizeAllSessions,
@@ -524,14 +525,17 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
       const query = trimmed.slice('/search'.length).trim();
       let out: string;
       if (!query) {
-        out = '用法：`/search <关键词>`。在当前 session chat 历史里大小写不敏感搜。';
+        out = '用法：`/search <关键词>`。在当前 session 持久化的 chat.jsonl 里大小写不敏感搜（不受 /clear 影响）。';
       } else {
         const q = query.toLowerCase();
-        const hits = state.chat.filter((m) =>
-          m.role !== 'tool' && m.text.toLowerCase().includes(q),
+        // 读 jsonl 最近 1000 条，跳过 tool，匹配关键词。
+        // 这样 /clear 之后也能搜到，因为 /clear 只清 React state 不动 jsonl。
+        const allEntries = readChatTail(cwd, persistence.meta.id, 1000);
+        const hits = allEntries.filter(
+          (m) => m.role !== 'tool' && m.text.toLowerCase().includes(q),
         );
         if (hits.length === 0) {
-          out = `没找到 "${query}"。\n（搜索范围：当前 session chat 历史；tool 消息和早 session 不算。）`;
+          out = `没找到 "${query}"。\n（搜索范围：当前 session 最近 1000 条 jsonl 记录，跳过 tool。）`;
         } else {
           const lines: string[] = [];
           lines.push(`搜到 ${hits.length} 条含 "${query}" 的消息：`);
