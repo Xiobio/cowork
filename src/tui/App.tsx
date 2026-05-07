@@ -183,7 +183,11 @@ export function App({ adapter, session, supervisor, manager, onExit, persistence
 
   // 用户至少交互过一次（user-submit 触发）后就不再显示 welcome banner，
   // 即便后来 /clear 把 chat 清空。
-  const [hasInteracted, setHasInteracted] = useState(false);
+  // 初值：resume 且有历史 chat 的 session 直接当成"已交互过"，避免初始
+  // 渲染（chat 还没注水）和 useLayoutEffect 注水后两帧之间闪烁 banner。
+  const [hasInteracted, setHasInteracted] = useState(
+    persistence.resumed && (persistence.bundle?.chat.length ?? 0) > 0,
+  );
 
   useLayoutEffect(() => {
     dispatch({ type: 'session-started', cliSessionId: session.cliSessionId ?? '', pid: session.pid });
